@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } 
 import { buildOptions, buildSystemPrompt, sendMessage } from "../agent.js";
 import type { AgentContext } from "../agent-context.js";
 import type { HarnessConfig } from "../config.js";
+import { formatErrorShort } from "../errors.js";
 import {
   createSessionMeta,
   findSessionByName,
@@ -529,7 +530,7 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
       } catch (err: any) {
         activeQueryRef.current = null;
         isStreamingRef.current = false;
-        dispatch({ type: "SET_ERROR", error: err.message });
+        dispatch({ type: "SET_ERROR", error: formatErrorShort(err) });
       }
     },
     [state.sessionId, agentContext, config, sessionDirs],

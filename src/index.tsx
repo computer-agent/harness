@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { render } from "ink";
@@ -9,9 +9,24 @@ import { App } from "./components/App.js";
 import { loadConfig } from "./config.js";
 import { createAgent } from "./create-agent.js";
 import { loadAgentEnv } from "./env.js";
+import { formatError } from "./errors.js";
 import { isFirstRun, runFirstRun } from "./first-run.js";
 import { setInkClear } from "./lib/ink-clear.js";
 import { findSessionByName, listSessions, loadSession } from "./sessions.js";
+
+// --- Global error safety net ---
+
+process.on("unhandledRejection", (reason) => {
+  console.error("");
+  console.error(formatError(reason));
+  process.exit(1);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("");
+  console.error(formatError(err));
+  process.exit(1);
+});
 
 // --- Arg parsing ---
 
@@ -86,7 +101,8 @@ if (getFlag("list-agents")) {
 // --- Auth check ---
 
 const hasApiKey = !!process.env.ANTHROPIC_API_KEY;
-const hasCredentials = existsSync(join(homedir(), ".claude", ".credentials.json"));
+const credentialsPath = join(homedir(), ".claude", ".credentials.json");
+const hasCredentials = existsSync(credentialsPath);
 
 if (!hasApiKey && !hasCredentials) {
   console.error("No authentication found.");
@@ -96,6 +112,36 @@ if (!hasApiKey && !hasCredentials) {
   console.error("     npm install -g @anthropic-ai/claude-code && claude login");
   console.error("  2. API key: set ANTHROPIC_API_KEY environment variable");
   process.exit(1);
+}
+
+// Validate credential expiry when using OAuth (best-effort — token refresh may still work)
+if (!hasApiKey && hasCredentials) {
+  try {
+    const creds = JSON.parse(readFileSync(credentialsPath, "utf-8"));
+    const oauth = creds?.claudeAiOauth;
+    if (oauth?.expiresAt && typeof oauth.expiresAt === "number") {
+      const expiresAt = new Date(oauth.expiresAt);
+      const now = new Date();
+      if (expiresAt < now && !oauth.refreshToken) {
+        console.error("Claude credentials have expired and no refresh token is available.");
+        console.error("");
+        console.error("  Run: claude login");
+        process.exit(1);
+      }
+      if (expiresAt < now) {
+        // Token expired but refresh token exists — the SDK may refresh automatically.
+        // Warn but don't block.
+        console.error("Note: OAuth token expired — the SDK will attempt to refresh it.");
+        console.error("  If this fails, run: claude login");
+        console.error("");
+      }
+    }
+  } catch {
+    // Malformed credentials file
+    console.error("Warning: Could not parse ~/.claude/.credentials.json");
+    console.error("  If authentication fails, run: claude login");
+    console.error("");
+  }
 }
 
 // --- Resolve agent ---
@@ -146,32 +192,38 @@ if (messageIdx !== -1) {
     process.exit(1);
   }
 
-  const systemPrompt = await buildSystemPrompt(agentContext);
-  const options = buildOptions(agentContext, { systemPrompt }, config);
-  const stream = sendMessage(message, options);
+  try {
+    const systemPrompt = await buildSystemPrompt(agentContext);
+    const options = buildOptions(agentContext, { systemPrompt }, config);
+    const stream = sendMessage(message, options);
 
-  let responseBuffer = "";
+    let responseBuffer = "";
 
-  for await (const msg of stream) {
-    if (msg.type === "stream_event") {
-      const event = (msg as any).event;
-      if (event?.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
-        process.stdout.write(event.delta.text);
-        responseBuffer += event.delta.text;
+    for await (const msg of stream) {
+      if (msg.type === "stream_event") {
+        const event = (msg as any).event;
+        if (event?.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
+          process.stdout.write(event.delta.text);
+          responseBuffer += event.delta.text;
+        }
+      }
+
+      if (msg.type === "assistant" && !responseBuffer) {
+        const text = (msg as any).message?.content
+          ?.filter((block: any) => block.type === "text")
+          .map((block: any) => block.text)
+          .join("");
+        if (text) {
+          process.stdout.write(text);
+        }
       }
     }
-
-    if (msg.type === "assistant" && !responseBuffer) {
-      const text = (msg as any).message?.content
-        ?.filter((block: any) => block.type === "text")
-        .map((block: any) => block.text)
-        .join("");
-      if (text) {
-        process.stdout.write(text);
-      }
-    }
+    process.stdout.write("\n");
+  } catch (err) {
+    console.error("");
+    console.error(formatError(err));
+    process.exit(1);
   }
-  process.stdout.write("\n");
 } else {
   // --- TUI mode ---
 
