@@ -5,9 +5,9 @@
 Global config lives at `~/.mastersof-ai/config.yaml`.
 
 ```yaml
-model: claude-opus-4-6
+model: claude-opus-4-6[1m]     # Opus 4.6 with 1M context window
 defaultAgent: cofounder
-effort: high                 # low | medium | high | max (default: high)
+effort: max                  # low | medium | high | max (default: max)
 hooks:
   logToolUse: false          # Log all tool calls via PreToolUse/PostToolUse hooks
 tools:
@@ -31,7 +31,7 @@ Config is loaded at startup, deep-merged with defaults. Tools are only created i
 
 ### effort
 
-Controls the reasoning effort level passed to the SDK. Maps to `low`, `medium`, `high`, or `max`. Defaults to `high` if not set.
+Controls the reasoning effort level passed to the SDK. Maps to `low`, `medium`, `high`, or `max`. Defaults to `max`. Can be changed at runtime via `/effort`.
 
 ### hooks.logToolUse
 

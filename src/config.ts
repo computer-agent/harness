@@ -22,7 +22,7 @@ export interface HarnessConfig {
 }
 
 const DEFAULTS: HarnessConfig = {
-  model: "claude-opus-4-6",
+  model: "claude-opus-4-6[1m]",
   defaultAgent: "cofounder",
   tools: {
     memory: { enabled: true },
@@ -36,7 +36,7 @@ const DEFAULTS: HarnessConfig = {
   hooks: {
     logToolUse: false,
   },
-  effort: "high",
+  effort: "max",
 };
 
 export function getHomeDir(): string {
@@ -74,15 +74,15 @@ export function loadConfig(): HarnessConfig {
 export const DEFAULT_CONFIG_YAML = `# Masters of AI Harness — Configuration
 # See: https://mastersof.ai/docs/config
 
-# Default model for all agents
-model: claude-opus-4-6
+# Default model for all agents (append [1m] for 1M context window)
+model: claude-opus-4-6[1m]
 
 # Agent to start when no --agent flag is given
 defaultAgent: cofounder
 
 # Effort level: low | medium | high | max
 # Controls how much thinking/reasoning effort the model applies
-effort: high
+effort: max
 
 # Tool domains — disable any you don't need
 tools:

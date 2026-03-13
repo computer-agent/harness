@@ -42,7 +42,7 @@ function totalInputTokens(usage: any): number {
   return (usage?.input_tokens ?? 0) + (usage?.cache_read_input_tokens ?? 0) + (usage?.cache_creation_input_tokens ?? 0);
 }
 
-const MAX_CONTEXT = 200_000;
+const MAX_CONTEXT = 1_000_000;
 
 export interface ToolAction {
   name: string;
@@ -89,16 +89,16 @@ function extractToolDetail(name: string, input: Record<string, unknown>): string
   }
 }
 
-function agentBanner(name: string): string {
+function agentBanner(name: string, model: string, effort: string): string {
   const displayName = name.toUpperCase();
   const padded = displayName.padStart(Math.floor((31 + displayName.length) / 2)).padEnd(31);
+  const modelShort = model.replace("claude-", "");
+  const infoLine = `${modelShort} · effort: ${effort}`.padEnd(31);
   return `  ╔═══════════════════════════════════════╗
   ║  ${padded}      ║
+  ║  ${infoLine}      ║
   ║                                       ║
-  ║  /sessions — list recent sessions     ║
-  ║  /resume [name|#N] — resume session   ║
-  ║  /name <text> — rename session        ║
-  ║  /new — start fresh  /quit — exit     ║
+  ║  Type /help for available commands     ║
   ╚═══════════════════════════════════════╝`;
 }
 
@@ -117,6 +117,8 @@ interface AppState {
   toolActions: ToolAction[];
   subagentProgress: Map<string, SubagentProgress>;
   agentName: string;
+  effortOverride: "low" | "medium" | "high" | "max" | null;
+  modelOverride: string | null;
 }
 
 type Action =
@@ -142,7 +144,9 @@ type Action =
       status: "completed" | "failed" | "stopped";
       summary: string;
       totalTokens: number;
-    };
+    }
+  | { type: "SET_EFFORT"; effort: "low" | "medium" | "high" | "max" }
+  | { type: "SET_MODEL"; model: string };
 
 function reducer(state: AppState, action: Action): AppState {
   const assistantMsg = (content: string): MessageData => ({
@@ -248,6 +252,10 @@ function reducer(state: AppState, action: Action): AppState {
       }
       return { ...state, subagentProgress: next };
     }
+    case "SET_EFFORT":
+      return { ...state, effortOverride: action.effort };
+    case "SET_MODEL":
+      return { ...state, modelOverride: action.model };
   }
 }
 
@@ -290,7 +298,7 @@ export interface AppProps {
 export function App({ initialSessionId, initialSessionName, agentContext, config }: AppProps) {
   const { exit } = useApp();
 
-  const banner = useMemo(() => agentBanner(agentContext.name), [agentContext.name]);
+  const banner = useMemo(() => agentBanner(agentContext.name, config.model, config.effort), [agentContext.name, config.model, config.effort]);
   const sessionDirs: SessionDirs = useMemo(
     () => ({ sessionsDir: agentContext.sessionsDir, lastSessionFile: agentContext.lastSessionFile }),
     [agentContext.sessionsDir, agentContext.lastSessionFile],
@@ -311,6 +319,8 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
     toolActions: [],
     subagentProgress: new Map(),
     agentName: agentContext.name,
+    effortOverride: null,
+    modelOverride: null,
   });
 
   // Tool input accumulation for extracting details
@@ -371,6 +381,11 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
       try {
         const systemPrompt = await buildSystemPrompt(agentContext);
         const loadedInstructions: string[] = [];
+        const effectiveConfig = {
+          ...config,
+          ...(state.effortOverride ? { effort: state.effortOverride } : {}),
+          ...(state.modelOverride ? { model: state.modelOverride } : {}),
+        };
         const options = buildOptions(
           agentContext,
           {
@@ -380,7 +395,7 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
               loadedInstructions.push(`  ${memoryType}  ${filePath}  (${loadReason})`);
             },
           },
-          config,
+          effectiveConfig,
         );
 
         let responseBuffer = "";
@@ -645,6 +660,76 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
         return;
       }
 
+      if (trimmed === "/help") {
+        const currentEffort = state.effortOverride ?? config.effort;
+        const currentModel = state.modelOverride ?? config.model;
+        const lines = [
+          "[Commands]",
+          "",
+          "  /help                     — show this help",
+          "  /effort [low|med|high|max] — show or set effort level",
+          "  /model [model-id]         — show or set model",
+          "  /sessions                 — list recent sessions",
+          "  /resume [name|#N]         — resume a session",
+          "  /name <text>              — rename current session",
+          "  /new                      — start fresh session",
+          "  /quit                     — exit",
+          "",
+          "[Keyboard shortcuts]",
+          "",
+          "  Enter       — send message",
+          "  Ctrl+J      — insert newline",
+          "  Ctrl+G      — open external editor",
+          "  Escape      — interrupt streaming / clear input",
+          "  Ctrl+C ×2   — exit",
+          "",
+          `[Current]  model: ${currentModel}  effort: ${currentEffort}`,
+        ];
+        dispatch({ type: "ADD_SYSTEM_MESSAGE", content: lines.join("\n") });
+        return;
+      }
+
+      if (trimmed.startsWith("/effort")) {
+        const arg = trimmed.slice("/effort".length).trim().toLowerCase();
+        const validLevels = ["low", "medium", "med", "high", "max"] as const;
+        const currentEffort = state.effortOverride ?? config.effort;
+
+        if (!arg) {
+          dispatch({
+            type: "ADD_SYSTEM_MESSAGE",
+            content: `[Effort: ${currentEffort}  (options: low, medium, high, max)]`,
+          });
+          return;
+        }
+
+        const normalized = arg === "med" ? "medium" : arg;
+        if (!["low", "medium", "high", "max"].includes(normalized)) {
+          dispatch({
+            type: "ADD_SYSTEM_MESSAGE",
+            content: `[Invalid effort level "${arg}". Options: low, medium, high, max]`,
+          });
+          return;
+        }
+
+        dispatch({ type: "SET_EFFORT", effort: normalized as "low" | "medium" | "high" | "max" });
+        dispatch({ type: "ADD_SYSTEM_MESSAGE", content: `[Effort set to: ${normalized}]` });
+        return;
+      }
+
+      if (trimmed.startsWith("/model")) {
+        const arg = trimmed.slice("/model".length).trim();
+        const currentModel = state.modelOverride ?? config.model;
+
+        if (!arg) {
+          dispatch({ type: "ADD_SYSTEM_MESSAGE", content: `[Model: ${currentModel}]` });
+          return;
+        }
+
+        dispatch({ type: "SET_MODEL", model: arg });
+        dispatch({ type: "ADD_SYSTEM_MESSAGE", content: `[Model set to: ${arg}]` });
+        return;
+      }
+
       // Non-command message: add to history
       historyRef.current.push(trimmed);
 
@@ -704,7 +789,11 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
           <Box>
             <Text color="magenta"> {agentContext.name}</Text>
             <Text dimColor> · </Text>
-            <Text dimColor>{config.model}</Text>
+            <Text dimColor>{state.modelOverride ?? config.model}</Text>
+            <Text dimColor> · </Text>
+            <Text color={((state.effortOverride ?? config.effort) === "max") ? "green" : "gray"}>
+              {state.effortOverride ?? config.effort}
+            </Text>
             {process.env.HARNESS_SANDBOXED && <Text dimColor> · 🔒</Text>}
           </Box>
           <ContextBar tokens={state.contextTokens} />
