@@ -313,12 +313,16 @@ export interface AppProps {
   initialSessionName: string | null;
   agentContext: AgentContext;
   config: HarnessConfig;
+  agentEnv?: Record<string, string>;
 }
 
-export function App({ initialSessionId, initialSessionName, agentContext, config }: AppProps) {
+export function App({ initialSessionId, initialSessionName, agentContext, config, agentEnv = {} }: AppProps) {
   const { exit } = useApp();
 
-  const banner = useMemo(() => agentBanner(agentContext.name, config.model, config.effort), [agentContext.name, config.model, config.effort]);
+  const banner = useMemo(
+    () => agentBanner(agentContext.name, config.model, config.effort),
+    [agentContext.name, config.model, config.effort],
+  );
   const sessionDirs: SessionDirs = useMemo(
     () => ({ sessionsDir: agentContext.sessionsDir, lastSessionFile: agentContext.lastSessionFile }),
     [agentContext.sessionsDir, agentContext.lastSessionFile],
@@ -413,6 +417,8 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
           {
             resume: state.sessionId ?? undefined,
             systemPrompt,
+            cwd: agentContext.workspaceDir,
+            agentEnv,
             toolFilter,
             onInstructionsLoaded: (filePath, memoryType, loadReason) => {
               loadedInstructions.push(`  ${memoryType}  ${filePath}  (${loadReason})`);
@@ -580,7 +586,7 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
         dispatch({ type: "SET_ERROR", error: formatErrorShort(err) });
       }
     },
-    [state.sessionId, agentContext, config, sessionDirs],
+    [state.sessionId, state.effortOverride, state.modelOverride, agentContext, config, sessionDirs, agentEnv],
   );
 
   const handleSubmit = useCallback(
@@ -837,7 +843,7 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
             <Text dimColor> · </Text>
             <Text dimColor>{state.modelOverride ?? config.model}</Text>
             <Text dimColor> · </Text>
-            <Text color={((state.effortOverride ?? config.effort) === "max") ? "green" : "gray"}>
+            <Text color={(state.effortOverride ?? config.effort) === "max" ? "green" : "gray"}>
               {state.effortOverride ?? config.effort}
             </Text>
             {process.env.HARNESS_SANDBOXED && <Text dimColor> · 🔒</Text>}

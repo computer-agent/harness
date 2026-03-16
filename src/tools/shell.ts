@@ -7,7 +7,7 @@ import { z } from "zod";
 const exec = promisify(execFile);
 const DEFAULT_TIMEOUT = 30_000;
 
-export function createShellTools(defaultCwd: string) {
+export function createShellTools(defaultCwd: string, agentEnv: Record<string, string> = {}) {
   const shellExec = tool(
     "shell_exec",
     "Execute a shell command. Runs in the current directory by default. Use for running tests, compiling, git operations, deployments — anything you'd do in a terminal.",
@@ -27,7 +27,7 @@ export function createShellTools(defaultCwd: string) {
           cwd: workDir,
           timeout,
           maxBuffer: 1024 * 1024,
-          env: { ...process.env },
+          env: { ...process.env, ...agentEnv },
         });
 
         let output = "";

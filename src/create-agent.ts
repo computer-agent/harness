@@ -6,13 +6,22 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+export class AgentExistsError extends Error {
+  constructor(
+    public readonly agentName: string,
+    path: string,
+  ) {
+    super(`Agent "${agentName}" already exists at ${path}`);
+    this.name = "AgentExistsError";
+  }
+}
+
 export function createAgent(name: string): void {
   const agentsDir = join(getHomeDir(), "agents");
   const agentDir = join(agentsDir, name);
 
   if (existsSync(agentDir)) {
-    console.error(`Agent "${name}" already exists at ${agentDir}`);
-    process.exit(1);
+    throw new AgentExistsError(name, agentDir);
   }
 
   const memoryDir = join(agentDir, "memory");

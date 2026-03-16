@@ -46,7 +46,10 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.76",
     "@dotenvx/dotenvx": "^1.52.0",
+    "@fastify/cors": "^11.2.0",
+    "@fastify/websocket": "^11.2.0",
     "@mozilla/readability": "^0.6.0",
+    "fastify": "^5.8.2",
     "ink": "^6.8.0",
     "jsdom": "^28.1.0",
     "marked": "^15.0.12",
@@ -66,6 +69,7 @@
     "@types/node": "^25.3.3",
     "@types/react": "^19.2.14",
     "@types/turndown": "^5.0.6",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.7.0"
   }
 }

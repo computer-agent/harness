@@ -7,7 +7,7 @@ import { buildOptions, buildSystemPrompt, sendMessage } from "./agent.js";
 import { AgentNotFoundError, DEFAULT_AGENT, listAgents, resolveAgent } from "./agent-context.js";
 import { App } from "./components/App.js";
 import { loadConfig } from "./config.js";
-import { createAgent } from "./create-agent.js";
+import { AgentExistsError, createAgent } from "./create-agent.js";
 import { loadAgentEnv } from "./env.js";
 import { formatError } from "./errors.js";
 import { isFirstRun, runFirstRun } from "./first-run.js";
@@ -53,7 +53,15 @@ if (args[0] === "create") {
     process.exit(1);
   }
   if (isFirstRun()) runFirstRun();
-  createAgent(name);
+  try {
+    createAgent(name);
+  } catch (err) {
+    if (err instanceof AgentExistsError) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    throw err;
+  }
   process.exit(0);
 }
 
@@ -163,144 +171,173 @@ if (!hasApiKey && hasCredentials) {
   }
 }
 
-// --- Resolve agent ---
+// --- Flag: --serve (server mode) ---
 
-const agentName = getFlagValue("agent") ?? config.defaultAgent ?? DEFAULT_AGENT;
-let agentContext: ReturnType<typeof resolveAgent>;
-try {
-  agentContext = resolveAgent(agentName);
-} catch (err) {
-  if (err instanceof AgentNotFoundError) {
-    console.error(err.message);
-    process.exit(1);
-  }
-  throw err;
-}
+if (getFlag("serve")) {
+  const port = parseInt(getFlagValue("port") ?? "3000", 10);
+  const host = getFlagValue("host") ?? "0.0.0.0";
 
-// Start in the agent's workspace directory
-process.chdir(agentContext.workspaceDir);
+  const { loadAccessConfig } = await import("./access.js");
+  const { startServer } = await import("./serve.js");
 
-// Load per-agent .env (encrypted or plaintext) — must happen before sandbox gate
-// so decrypted values are available for passthrough into bwrap
-const agentEnvKeys = loadAgentEnv(agentContext.agentDir);
+  const access = loadAccessConfig();
 
-// Sandbox gate: opt-in on all platforms via --sandbox flag
-const sandboxEnabled = getFlag("sandbox");
-
-if (sandboxEnabled && !process.env.HARNESS_SANDBOXED) {
-  // Check for bwrap
-  try {
-    (await import("node:child_process")).execFileSync("bwrap", ["--version"], { stdio: "ignore" });
-  } catch {
-    console.error("Sandbox requires bubblewrap (bwrap) but it's not installed.");
-    console.error("  Install: sudo apt install bubblewrap");
-    process.exit(1);
-  }
-
-  const { loadSandboxConfig, execInSandbox } = await import("./sandbox.js");
-  const sandboxConfig = loadSandboxConfig(agentContext, { autoCreate: true });
-  if (!sandboxConfig) {
-    console.error(`No sandbox config found at ~/.mastersof-ai/agents/${agentName}/sandbox.json`);
-    process.exit(1);
-  }
-  const filteredArgv = process.argv.filter((a) => a !== "--sandbox" && a !== "--no-sandbox");
-  execInSandbox(agentContext, sandboxConfig, filteredArgv, agentEnvKeys);
-}
-
-const sessionDirs = { sessionsDir: agentContext.sessionsDir, lastSessionFile: agentContext.lastSessionFile };
-
-// --- Flag: --message (headless mode) ---
-
-const messageIdx = args.indexOf("--message");
-
-if (messageIdx !== -1) {
-  const message = args.slice(messageIdx + 1).join(" ");
-  if (!message) {
-    console.error('Usage: mastersof-ai --message "your message"');
-    process.exit(1);
-  }
-
-  try {
-    const { systemPrompt, manifest } = await buildSystemPrompt(agentContext);
-    const toolFilter = manifest.frontmatter.tools ?? undefined;
-    const options = buildOptions(agentContext, { systemPrompt, toolFilter }, config);
-    const stream = sendMessage(message, options);
-
-    let responseBuffer = "";
-
-    for await (const msg of stream) {
-      if (msg.type === "stream_event") {
-        const event = (msg as any).event;
-        if (event?.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
-          process.stdout.write(event.delta.text);
-          responseBuffer += event.delta.text;
-        }
-      }
-
-      if (msg.type === "assistant" && !responseBuffer) {
-        const text = (msg as any).message?.content
-          ?.filter((block: any) => block.type === "text")
-          .map((block: any) => block.text)
-          .join("");
-        if (text) {
-          process.stdout.write(text);
-        }
-      }
-    }
-    process.stdout.write("\n");
-  } catch (err) {
+  if (access.users.size === 0) {
+    console.error("Warning: No tokens defined in ~/.mastersof-ai/access.yaml");
+    console.error("All API requests will be rejected. Create access.yaml to enable access.");
     console.error("");
+  }
+
+  try {
+    await startServer({ port, host, config, access });
+  } catch (err) {
     console.error(formatError(err));
     process.exit(1);
   }
+  // startServer blocks (Fastify listen keeps the process alive)
 } else {
-  // --- TUI mode ---
+  // --- Resolve agent ---
 
-  const resumeIdx = args.indexOf("--resume");
-  const isResume = resumeIdx !== -1;
-  let initialSessionId: string | null = null;
-  let initialSessionName: string | null = null;
-
-  if (isResume) {
-    const resumeArg = resumeIdx + 1 < args.length && !args[resumeIdx + 1].startsWith("--") ? args[resumeIdx + 1] : null;
-
-    if (resumeArg) {
-      const byId = await loadSession(sessionDirs, resumeArg);
-      if (byId) {
-        initialSessionId = byId.id;
-        initialSessionName = byId.name;
-      } else {
-        const sessions = await listSessions(sessionDirs);
-        const match = findSessionByName(resumeArg, sessions);
-        if (match) {
-          initialSessionId = match.id;
-          initialSessionName = match.name;
-        } else {
-          console.error(`No session matching "${resumeArg}"`);
-          process.exit(1);
-        }
-      }
-    } else {
-      // No argument — resume most recent session
-      // Use /sessions + /resume #N inside the TUI for browsing
-      const sessions = await listSessions(sessionDirs);
-      if (sessions.length === 0) {
-        console.error("No sessions found.");
-        process.exit(1);
-      }
-      initialSessionId = sessions[0].id;
-      initialSessionName = sessions[0].name;
+  const agentName = getFlagValue("agent") ?? config.defaultAgent ?? DEFAULT_AGENT;
+  let agentContext: ReturnType<typeof resolveAgent>;
+  try {
+    agentContext = resolveAgent(agentName);
+  } catch (err) {
+    if (err instanceof AgentNotFoundError) {
+      console.error(err.message);
+      process.exit(1);
     }
+    throw err;
   }
 
-  const instance = render(
-    <App
-      initialSessionId={initialSessionId}
-      initialSessionName={initialSessionName}
-      agentContext={agentContext}
-      config={config}
-    />,
-    { exitOnCtrlC: false },
-  );
-  setInkClear(instance.clear);
-}
+  // Load per-agent .env (encrypted or plaintext) — must happen before sandbox gate
+  // so decrypted values are available for passthrough into bwrap
+  const agentEnvKeys = loadAgentEnv(agentContext.agentDir);
+
+  // Sandbox gate: opt-in on all platforms via --sandbox flag
+  const sandboxEnabled = getFlag("sandbox");
+
+  if (sandboxEnabled && !process.env.HARNESS_SANDBOXED) {
+    // Check for bwrap
+    try {
+      (await import("node:child_process")).execFileSync("bwrap", ["--version"], { stdio: "ignore" });
+    } catch {
+      console.error("Sandbox requires bubblewrap (bwrap) but it's not installed.");
+      console.error("  Install: sudo apt install bubblewrap");
+      process.exit(1);
+    }
+
+    const { loadSandboxConfig, execInSandbox } = await import("./sandbox.js");
+    const sandboxConfig = loadSandboxConfig(agentContext, { autoCreate: true });
+    if (!sandboxConfig) {
+      console.error(`No sandbox config found at ~/.mastersof-ai/agents/${agentName}/sandbox.json`);
+      process.exit(1);
+    }
+    const filteredArgv = process.argv.filter((a) => a !== "--sandbox" && a !== "--no-sandbox");
+    execInSandbox(agentContext, sandboxConfig, filteredArgv, agentEnvKeys);
+  }
+
+  const sessionDirs = { sessionsDir: agentContext.sessionsDir, lastSessionFile: agentContext.lastSessionFile };
+
+  // --- Flag: --message (headless mode) ---
+
+  const messageIdx = args.indexOf("--message");
+
+  if (messageIdx !== -1) {
+    const message = args.slice(messageIdx + 1).join(" ");
+    if (!message) {
+      console.error('Usage: mastersof-ai --message "your message"');
+      process.exit(1);
+    }
+
+    try {
+      const { systemPrompt, manifest } = await buildSystemPrompt(agentContext);
+      const toolFilter = manifest.frontmatter.tools ?? undefined;
+      const options = buildOptions(
+        agentContext,
+        { systemPrompt, cwd: agentContext.workspaceDir, agentEnv: agentEnvKeys, toolFilter },
+        config,
+      );
+      const stream = sendMessage(message, options);
+
+      let responseBuffer = "";
+
+      for await (const msg of stream) {
+        if (msg.type === "stream_event") {
+          const event = (msg as any).event;
+          if (event?.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
+            process.stdout.write(event.delta.text);
+            responseBuffer += event.delta.text;
+          }
+        }
+
+        if (msg.type === "assistant" && !responseBuffer) {
+          const text = (msg as any).message?.content
+            ?.filter((block: any) => block.type === "text")
+            .map((block: any) => block.text)
+            .join("");
+          if (text) {
+            process.stdout.write(text);
+          }
+        }
+      }
+      process.stdout.write("\n");
+    } catch (err) {
+      console.error("");
+      console.error(formatError(err));
+      process.exit(1);
+    }
+  } else {
+    // --- TUI mode ---
+
+    const resumeIdx = args.indexOf("--resume");
+    const isResume = resumeIdx !== -1;
+    let initialSessionId: string | null = null;
+    let initialSessionName: string | null = null;
+
+    if (isResume) {
+      const resumeArg =
+        resumeIdx + 1 < args.length && !args[resumeIdx + 1].startsWith("--") ? args[resumeIdx + 1] : null;
+
+      if (resumeArg) {
+        const byId = await loadSession(sessionDirs, resumeArg);
+        if (byId) {
+          initialSessionId = byId.id;
+          initialSessionName = byId.name;
+        } else {
+          const sessions = await listSessions(sessionDirs);
+          const match = findSessionByName(resumeArg, sessions);
+          if (match) {
+            initialSessionId = match.id;
+            initialSessionName = match.name;
+          } else {
+            console.error(`No session matching "${resumeArg}"`);
+            process.exit(1);
+          }
+        }
+      } else {
+        // No argument — resume most recent session
+        // Use /sessions + /resume #N inside the TUI for browsing
+        const sessions = await listSessions(sessionDirs);
+        if (sessions.length === 0) {
+          console.error("No sessions found.");
+          process.exit(1);
+        }
+        initialSessionId = sessions[0].id;
+        initialSessionName = sessions[0].name;
+      }
+    }
+
+    const instance = render(
+      <App
+        initialSessionId={initialSessionId}
+        initialSessionName={initialSessionName}
+        agentContext={agentContext}
+        config={config}
+        agentEnv={agentEnvKeys}
+      />,
+      { exitOnCtrlC: false },
+    );
+    setInkClear(instance.clear);
+  }
+} // close the else block for --serve

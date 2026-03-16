@@ -47,7 +47,7 @@ async function extractRelevantContent(markdown: string, userQuery: string, model
   return resultText || markdown;
 }
 
-export function createWebTools(webConfig?: { extraction_model?: string }) {
+export function createWebTools(webConfig?: { extraction_model?: string }, agentEnv: Record<string, string> = {}) {
   const extractionModel = webConfig?.extraction_model;
 
   const webSearch = tool(
@@ -58,7 +58,7 @@ export function createWebTools(webConfig?: { extraction_model?: string }) {
       count: z.number().optional().describe("Number of results to return (default 5, max 20)"),
     },
     async ({ query, count = 5 }) => {
-      const apiKey = process.env.BRAVE_API_KEY;
+      const apiKey = agentEnv.BRAVE_API_KEY ?? process.env.BRAVE_API_KEY;
       if (!apiKey) {
         return {
           content: [{ type: "text" as const, text: "BRAVE_API_KEY not set. Cannot perform web search." }],

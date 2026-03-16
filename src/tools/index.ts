@@ -38,16 +38,21 @@ export function isToolEnabled(domain: ToolDomain, config: HarnessConfig, filter?
 const createServer = (name: string, tools: Parameters<typeof createSdkMcpServer>[0]["tools"]) =>
   createSdkMcpServer({ name, tools });
 
-export function createAgentServers(ctx: AgentContext, config: HarnessConfig, toolFilter?: ToolFilter) {
+export function createAgentServers(
+  ctx: AgentContext,
+  config: HarnessConfig,
+  cwd: string,
+  agentEnv: Record<string, string> = {},
+  toolFilter?: ToolFilter,
+) {
   const prefix = `${ctx.name}-`;
-  const cwd = process.cwd();
   const servers: Record<string, ReturnType<typeof createSdkMcpServer>> = {};
 
   if (isToolEnabled("memory", config, toolFilter)) {
     servers[`${prefix}memory`] = createServer(`${prefix}memory`, createMemoryTools(ctx.memoryDir));
   }
   if (isToolEnabled("web", config, toolFilter)) {
-    servers[`${prefix}web`] = createServer(`${prefix}web`, createWebTools(config.tools.web));
+    servers[`${prefix}web`] = createServer(`${prefix}web`, createWebTools(config.tools.web, agentEnv));
   }
   if (isToolEnabled("introspection", config, toolFilter)) {
     servers[`${prefix}introspection`] = createServer(
@@ -59,7 +64,7 @@ export function createAgentServers(ctx: AgentContext, config: HarnessConfig, too
     servers[`${prefix}workspace`] = createServer(`${prefix}workspace`, createWorkspaceTools(cwd));
   }
   if (isToolEnabled("shell", config, toolFilter)) {
-    servers[`${prefix}shell`] = createServer(`${prefix}shell`, createShellTools(cwd));
+    servers[`${prefix}shell`] = createServer(`${prefix}shell`, createShellTools(cwd, agentEnv));
   }
   if (isToolEnabled("models", config, toolFilter)) {
     servers[`${prefix}models`] = createServer(`${prefix}models`, modelQueryTools);

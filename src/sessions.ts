@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface SessionDirs {
@@ -47,6 +47,15 @@ export async function listSessions(dirs: SessionDirs): Promise<SessionMeta[]> {
     return sessions;
   } catch {
     return [];
+  }
+}
+
+export async function deleteSession(dirs: SessionDirs, id: string): Promise<boolean> {
+  try {
+    await unlink(join(dirs.sessionsDir, `${id}.json`));
+    return true;
+  } catch {
+    return false;
   }
 }
 

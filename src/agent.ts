@@ -125,6 +125,8 @@ export function buildOptions(
   opts: {
     resume?: string;
     systemPrompt: string;
+    cwd?: string;
+    agentEnv?: Record<string, string>;
     toolFilter?: ToolFilter;
     onInstructionsLoaded?: (filePath: string, memoryType: string, loadReason: string) => void;
     onAskUserQuestion?: (input: Record<string, unknown>) => Promise<Record<string, string> | null>;
@@ -133,10 +135,13 @@ export function buildOptions(
 ): Options {
   const hooks = buildHooks(ctx, config, opts.onInstructionsLoaded);
   const canUseTool = buildCanUseTool(ctx, config, opts.onAskUserQuestion);
+  const cwd = opts.cwd ?? ctx.workspaceDir;
+  const agentEnv = opts.agentEnv ?? {};
 
   return {
     model: config.model,
     systemPrompt: opts.systemPrompt,
+    cwd,
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     tools: ["AskUserQuestion"],
@@ -147,7 +152,7 @@ export function buildOptions(
       await mkdir(ctx.stateDir, { recursive: true });
       await appendFile(ctx.stderrLog, `${new Date().toISOString()} ${data}\n`);
     },
-    mcpServers: createAgentServers(ctx, config, opts.toolFilter),
+    mcpServers: createAgentServers(ctx, config, cwd, agentEnv, opts.toolFilter),
     strictMcpConfig: true,
     agents: createAgentRegistry(ctx.name),
     ...(hooks ? { hooks } : {}),
