@@ -83,11 +83,12 @@ async function queryModel(opts: {
         usageInfo = formatUsage(u.input_tokens ?? 0, u.output_tokens ?? 0);
       }
     }
+    // result is authoritative for text — matches web.ts pattern
+    if ("result" in msg && typeof (msg as any).result === "string") {
+      const resultStr = (msg as any).result;
+      if (resultStr) responseText = resultStr;
+    }
     if (msg.type === "result") {
-      // SDKResultSuccess has .result (string) and .modelUsage
-      if (!responseText) {
-        responseText = (msg as any).result ?? "";
-      }
       // Prefer modelUsage from result for accurate totals
       const mu = (msg as any).modelUsage as Record<string, { inputTokens?: number; outputTokens?: number }> | undefined;
       if (mu) {
@@ -107,7 +108,7 @@ async function queryModel(opts: {
 
 const modelQuery = tool(
   "model_query",
-  'Send a query to a specified Claude model with a custom system prompt. Returns the model\'s text response. Use for evaluations, comparisons, testing across models. Accepts model aliases: "haiku", "sonnet", "opus".',
+  'Send a one-shot query to a specific Claude model. No tools — just raw model response. Use for: cross-model comparisons, evaluations, quick questions to a specific model. Do NOT use for research or tasks requiring web/file access — use sub-agents instead. Aliases: "haiku", "sonnet", "opus".',
   {
     model: z.string().describe('Model ID or alias: "haiku", "sonnet", "opus", or full ID like "claude-haiku-4-5"'),
     message: z.string().describe("The user message to send"),

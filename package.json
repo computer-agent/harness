@@ -41,7 +41,7 @@
     "check": "biome check && tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.75",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.76",
     "@dotenvx/dotenvx": "^1.52.0",
     "@mozilla/readability": "^0.6.0",
     "ink": "^6.8.0",
