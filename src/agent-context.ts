@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { getHomeDir } from "./config.js";
+import { type AgentManifest, loadAgentManifest } from "./manifest.js";
 
 export interface AgentContext {
   name: string;
@@ -18,6 +19,16 @@ export interface AgentContext {
 
 export const DEFAULT_AGENT = "cofounder";
 
+export class AgentNotFoundError extends Error {
+  constructor(
+    public readonly agentName: string,
+    reason: string,
+  ) {
+    super(`Agent "${agentName}": ${reason}`);
+    this.name = "AgentNotFoundError";
+  }
+}
+
 export function getAgentsDir(): string {
   return join(getHomeDir(), "agents");
 }
@@ -27,12 +38,10 @@ export function resolveAgent(name: string): AgentContext {
   const identityPath = join(agentDir, "IDENTITY.md");
 
   if (!existsSync(agentDir)) {
-    console.error(`Agent "${name}" not found — ~/.mastersof-ai/agents/${name}/ does not exist`);
-    process.exit(1);
+    throw new AgentNotFoundError(name, `directory not found: ${agentDir}`);
   }
   if (!existsSync(identityPath)) {
-    console.error(`Agent "${name}" has no IDENTITY.md — ~/.mastersof-ai/agents/${name}/IDENTITY.md not found`);
-    process.exit(1);
+    throw new AgentNotFoundError(name, `IDENTITY.md not found: ${identityPath}`);
   }
 
   const stateDir = join(getHomeDir(), "state", name);
@@ -52,4 +61,39 @@ export function resolveAgent(name: string): AgentContext {
     stderrLog: join(stateDir, "stderr.log"),
     workspaceDir,
   };
+}
+
+/**
+ * Scan the agents directory and return manifests for all valid agents.
+ * Agents with parse errors are included with default frontmatter (warnings logged to stderr).
+ */
+export async function listAgents(): Promise<AgentManifest[]> {
+  const agentsDir = getAgentsDir();
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = readdirSync(agentsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const agentDirs = entries
+    .filter((e) => e.isDirectory() && existsSync(join(agentsDir, e.name, "IDENTITY.md")))
+    .map((e) => join(agentsDir, e.name));
+
+  const results = await Promise.all(
+    agentDirs.map(async (dir) => {
+      try {
+        const { manifest, warnings } = await loadAgentManifest(dir);
+        for (const w of warnings) {
+          console.error(`Warning [${manifest.id}]: ${w.message}`);
+        }
+        return manifest;
+      } catch (err) {
+        console.error(`Error loading agent from ${dir}: ${err}`);
+        return null;
+      }
+    }),
+  );
+
+  return results.filter((m): m is AgentManifest => m !== null);
 }

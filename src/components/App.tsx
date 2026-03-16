@@ -20,9 +20,12 @@ import {
   saveSession,
   touchSession,
 } from "../sessions.js";
+import type { ParsedQuestion } from "../types/ask-user.js";
+import { parseQuestions } from "../types/ask-user.js";
 import { ChatHistory } from "./ChatHistory.js";
 import { InputArea } from "./InputArea.js";
 import type { MessageData } from "./Message.js";
+import { QuestionSelector } from "./QuestionSelector.js";
 import { StreamingResponse } from "./StreamingResponse.js";
 
 const marked = new Marked(markedTerminal());
@@ -119,6 +122,10 @@ interface AppState {
   agentName: string;
   effortOverride: "low" | "medium" | "high" | "max" | null;
   modelOverride: string | null;
+  pendingQuestion: {
+    questions: ParsedQuestion[];
+    resolve: (answers: Record<string, string> | null) => void;
+  } | null;
 }
 
 type Action =
@@ -146,7 +153,13 @@ type Action =
       totalTokens: number;
     }
   | { type: "SET_EFFORT"; effort: "low" | "medium" | "high" | "max" }
-  | { type: "SET_MODEL"; model: string };
+  | { type: "SET_MODEL"; model: string }
+  | {
+      type: "ASK_QUESTION_SHOW";
+      questions: ParsedQuestion[];
+      resolve: (answers: Record<string, string> | null) => void;
+    }
+  | { type: "ASK_QUESTION_DONE" };
 
 function reducer(state: AppState, action: Action): AppState {
   const assistantMsg = (content: string): MessageData => ({
@@ -256,6 +269,13 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, effortOverride: action.effort };
     case "SET_MODEL":
       return { ...state, modelOverride: action.model };
+    case "ASK_QUESTION_SHOW":
+      return {
+        ...state,
+        pendingQuestion: { questions: action.questions, resolve: action.resolve },
+      };
+    case "ASK_QUESTION_DONE":
+      return { ...state, pendingQuestion: null };
   }
 }
 
@@ -321,6 +341,7 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
     agentName: agentContext.name,
     effortOverride: null,
     modelOverride: null,
+    pendingQuestion: null,
   });
 
   // Tool input accumulation for extracting details
@@ -379,7 +400,8 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
       isStreamingRef.current = true;
 
       try {
-        const systemPrompt = await buildSystemPrompt(agentContext);
+        const { systemPrompt, manifest } = await buildSystemPrompt(agentContext);
+        const toolFilter = manifest.frontmatter.tools ?? undefined;
         const loadedInstructions: string[] = [];
         const effectiveConfig = {
           ...config,
@@ -391,8 +413,18 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
           {
             resume: state.sessionId ?? undefined,
             systemPrompt,
+            toolFilter,
             onInstructionsLoaded: (filePath, memoryType, loadReason) => {
               loadedInstructions.push(`  ${memoryType}  ${filePath}  (${loadReason})`);
+            },
+            onAskUserQuestion: (input) => {
+              const questions = parseQuestions(input);
+              if (questions.length === 0) {
+                return Promise.resolve(null);
+              }
+              return new Promise<Record<string, string> | null>((resolve) => {
+                dispatch({ type: "ASK_QUESTION_SHOW", questions, resolve });
+              });
             },
           },
           effectiveConfig,
@@ -777,13 +809,27 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
 
       <Box marginTop={1} flexDirection="column">
         <Text dimColor>{"─".repeat(process.stdout.columns || 80)}</Text>
-        <InputArea
-          isDisabled={false}
-          isStreaming={state.isStreaming}
-          onSubmit={handleSubmit}
-          resetKey={state.inputKey}
-          history={historyRef.current}
-        />
+        {state.pendingQuestion ? (
+          <QuestionSelector
+            questions={state.pendingQuestion.questions}
+            onComplete={(answers) => {
+              state.pendingQuestion?.resolve(answers);
+              dispatch({ type: "ASK_QUESTION_DONE" });
+            }}
+            onDismiss={() => {
+              state.pendingQuestion?.resolve(null);
+              dispatch({ type: "ASK_QUESTION_DONE" });
+            }}
+          />
+        ) : (
+          <InputArea
+            isDisabled={false}
+            isStreaming={state.isStreaming}
+            onSubmit={handleSubmit}
+            resetKey={state.inputKey}
+            history={historyRef.current}
+          />
+        )}
         <Text dimColor>{"─".repeat(process.stdout.columns || 80)}</Text>
         <Box justifyContent="space-between">
           <Box>

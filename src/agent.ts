@@ -10,8 +10,8 @@ import {
 import type { AgentContext } from "./agent-context.js";
 import { createAgentRegistry } from "./agents/index.js";
 import type { HarnessConfig } from "./config.js";
-import { loadIdentity } from "./prompt.js";
-import { createAgentServers } from "./tools/index.js";
+import { type AgentManifest, loadAgentManifest } from "./manifest.js";
+import { createAgentServers, type ToolFilter } from "./tools/index.js";
 
 async function loadMemoryContext(contextFile: string): Promise<string | null> {
   try {
@@ -87,14 +87,35 @@ function buildHooks(
   return Object.keys(hooks).length > 0 ? hooks : undefined;
 }
 
-function buildCanUseTool(ctx: AgentContext, config: HarnessConfig): CanUseTool | undefined {
-  if (!config.hooks.logToolUse) return undefined;
+function buildCanUseTool(
+  ctx: AgentContext,
+  config: HarnessConfig,
+  onAskUserQuestion?: (input: Record<string, unknown>) => Promise<Record<string, string> | null>,
+): CanUseTool {
+  return async (toolName, input, options) => {
+    // Logging
+    if (config.hooks.logToolUse) {
+      const ts = new Date().toISOString();
+      const inputSummary = JSON.stringify(input).slice(0, 200);
+      await mkdir(ctx.stateDir, { recursive: true });
+      await appendFile(ctx.stderrLog, `${ts} [canUseTool] ${toolName} ${inputSummary}\n`);
+    }
 
-  return async (toolName, input) => {
-    const ts = new Date().toISOString();
-    const inputSummary = JSON.stringify(input).slice(0, 200);
-    await mkdir(ctx.stateDir, { recursive: true });
-    await appendFile(ctx.stderrLog, `${ts} [canUseTool] ${toolName} ${inputSummary}\n`);
+    // AskUserQuestion handling
+    if (toolName === "AskUserQuestion") {
+      if (options.agentID) {
+        return { behavior: "deny", message: "Sub-agents cannot ask user questions" };
+      }
+      if (!onAskUserQuestion) {
+        return { behavior: "deny", message: "No question handler available" };
+      }
+      const answers = await onAskUserQuestion(input);
+      if (!answers) {
+        return { behavior: "deny", message: "User dismissed the question" };
+      }
+      return { behavior: "allow", updatedInput: { ...input, answers } };
+    }
+
     return { behavior: "allow" as const };
   };
 }
@@ -104,19 +125,21 @@ export function buildOptions(
   opts: {
     resume?: string;
     systemPrompt: string;
+    toolFilter?: ToolFilter;
     onInstructionsLoaded?: (filePath: string, memoryType: string, loadReason: string) => void;
+    onAskUserQuestion?: (input: Record<string, unknown>) => Promise<Record<string, string> | null>;
   },
   config: HarnessConfig,
 ): Options {
   const hooks = buildHooks(ctx, config, opts.onInstructionsLoaded);
-  const canUseTool = buildCanUseTool(ctx, config);
+  const canUseTool = buildCanUseTool(ctx, config, opts.onAskUserQuestion);
 
   return {
     model: config.model,
     systemPrompt: opts.systemPrompt,
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
-    tools: [],
+    tools: ["AskUserQuestion"],
     thinking: { type: "adaptive" },
     effort: config.effort,
     includePartialMessages: true,
@@ -124,17 +147,29 @@ export function buildOptions(
       await mkdir(ctx.stateDir, { recursive: true });
       await appendFile(ctx.stderrLog, `${new Date().toISOString()} ${data}\n`);
     },
-    mcpServers: createAgentServers(ctx, config),
+    mcpServers: createAgentServers(ctx, config, opts.toolFilter),
     strictMcpConfig: true,
     agents: createAgentRegistry(ctx.name),
     ...(hooks ? { hooks } : {}),
-    ...(canUseTool ? { canUseTool } : {}),
+    canUseTool,
     ...(opts.resume ? { resume: opts.resume } : {}),
   };
 }
 
-export async function buildSystemPrompt(ctx: AgentContext): Promise<string> {
-  const identity = await loadIdentity(ctx.identityPath);
+interface SystemPromptResult {
+  systemPrompt: string;
+  manifest: AgentManifest;
+}
+
+export async function buildSystemPrompt(ctx: AgentContext): Promise<SystemPromptResult> {
+  const { manifest, warnings } = await loadAgentManifest(ctx.agentDir);
+
+  // Log any frontmatter warnings
+  for (const w of warnings) {
+    console.error(`Warning [${manifest.id}]: ${w.message}`);
+  }
+
+  const identity = manifest.body;
   const memoryContext = await loadMemoryContext(ctx.contextFile);
 
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -154,7 +189,7 @@ export async function buildSystemPrompt(ctx: AgentContext): Promise<string> {
   parts.push(dateLine);
   parts.push(workspaceLine);
 
-  return parts.join("\n\n");
+  return { systemPrompt: parts.join("\n\n"), manifest };
 }
 
 export function sendMessage(prompt: string, options: Options): Query {

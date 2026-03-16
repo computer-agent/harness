@@ -1,10 +1,10 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { render } from "ink";
 import React from "react";
 import { buildOptions, buildSystemPrompt, sendMessage } from "./agent.js";
-import { DEFAULT_AGENT, getAgentsDir, resolveAgent } from "./agent-context.js";
+import { AgentNotFoundError, DEFAULT_AGENT, listAgents, resolveAgent } from "./agent-context.js";
 import { App } from "./components/App.js";
 import { loadConfig } from "./config.js";
 import { createAgent } from "./create-agent.js";
@@ -77,23 +77,42 @@ const config = loadConfig();
 // --- Flag: --list-agents ---
 
 if (getFlag("list-agents")) {
-  const agentsDir = getAgentsDir();
-  try {
-    const entries = readdirSync(agentsDir, { withFileTypes: true });
-    const agents = entries
-      .filter((e) => e.isDirectory() && existsSync(join(agentsDir, e.name, "IDENTITY.md")))
-      .map((e) => e.name);
-    if (agents.length === 0) {
-      console.log("No agents found. Create one with: mastersof-ai create <name>");
-    } else {
-      console.log("Available agents:\n");
-      for (const name of agents) {
-        const marker = name === config.defaultAgent ? " (default)" : "";
-        console.log(`  ${name}${marker}`);
+  const agents = await listAgents();
+  if (agents.length === 0) {
+    console.log("No agents found. Create one with: mastersof-ai create <name>");
+  } else {
+    console.log("Available agents:\n");
+    for (const agent of agents) {
+      const isDefault = agent.id === config.defaultAgent;
+      const marker = isDefault ? " (default)" : "";
+
+      console.log(`  ${agent.displayName} [${agent.id}]${marker}`);
+      if (agent.description) console.log(`    ${agent.description}`);
+
+      // Tools
+      const tools = agent.frontmatter.tools;
+      if (tools?.allow) {
+        console.log(`    tools: ${tools.allow.join(", ")}`);
+      } else if (tools?.deny) {
+        console.log(`    tools: all except ${tools.deny.join(", ")}`);
       }
+
+      // Access
+      if (agent.frontmatter.access !== "public") {
+        const accessStr =
+          agent.frontmatter.access === "users"
+            ? `users: ${agent.frontmatter.users.join(", ")}`
+            : agent.frontmatter.access;
+        console.log(`    access: ${accessStr}`);
+      }
+
+      // Tags
+      if (agent.frontmatter.tags.length > 0) {
+        console.log(`    tags: ${agent.frontmatter.tags.join(", ")}`);
+      }
+
+      console.log(""); // blank line between agents
     }
-  } catch {
-    console.log("No agents found. Run: mastersof-ai --init");
   }
   process.exit(0);
 }
@@ -147,7 +166,16 @@ if (!hasApiKey && hasCredentials) {
 // --- Resolve agent ---
 
 const agentName = getFlagValue("agent") ?? config.defaultAgent ?? DEFAULT_AGENT;
-const agentContext = resolveAgent(agentName);
+let agentContext: ReturnType<typeof resolveAgent>;
+try {
+  agentContext = resolveAgent(agentName);
+} catch (err) {
+  if (err instanceof AgentNotFoundError) {
+    console.error(err.message);
+    process.exit(1);
+  }
+  throw err;
+}
 
 // Start in the agent's workspace directory
 process.chdir(agentContext.workspaceDir);
@@ -193,8 +221,9 @@ if (messageIdx !== -1) {
   }
 
   try {
-    const systemPrompt = await buildSystemPrompt(agentContext);
-    const options = buildOptions(agentContext, { systemPrompt }, config);
+    const { systemPrompt, manifest } = await buildSystemPrompt(agentContext);
+    const toolFilter = manifest.frontmatter.tools ?? undefined;
+    const options = buildOptions(agentContext, { systemPrompt, toolFilter }, config);
     const stream = sendMessage(message, options);
 
     let responseBuffer = "";
