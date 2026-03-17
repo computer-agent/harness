@@ -35,6 +35,6 @@ Your job is to produce clear, dense, well-structured content. You write strategy
       `mcp__${toolPrefix}web__web_search`,
       `mcp__${toolPrefix}web__web_fetch`,
     ],
-    disallowedTools: [`mcp__${toolPrefix}shell__shell_exec`],
+    disallowedTools: [`mcp__${toolPrefix}shell__shell_exec`, "AskUserQuestion"],
   };
 }

@@ -1,0 +1,9 @@
+name = "mastersof-ai-web"
+compatibility_date = "2026-03-01"
+pages_build_output_dir = "dist"
+
+[env.production]
+vars = { VITE_API_URL = "https://api.mastersof.ai", VITE_WS_URL = "wss://api.mastersof.ai/ws" }
+
+[env.staging]
+vars = { VITE_API_URL = "https://staging-api.mastersof.ai", VITE_WS_URL = "wss://staging-api.mastersof.ai/ws" }

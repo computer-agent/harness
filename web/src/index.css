@@ -1,0 +1,95 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-background: var(--color-zinc-950);
+  --color-foreground: var(--color-zinc-50);
+  --color-muted: var(--color-zinc-800);
+  --color-muted-foreground: var(--color-zinc-400);
+  --color-card: var(--color-zinc-900);
+  --color-card-foreground: var(--color-zinc-50);
+  --color-border: var(--color-zinc-800);
+  --color-input: var(--color-zinc-800);
+  --color-primary: var(--color-zinc-50);
+  --color-primary-foreground: var(--color-zinc-900);
+  --color-secondary: var(--color-zinc-800);
+  --color-secondary-foreground: var(--color-zinc-50);
+  --color-accent: var(--color-zinc-800);
+  --color-accent-foreground: var(--color-zinc-50);
+  --color-destructive: var(--color-red-500);
+  --color-destructive-foreground: var(--color-zinc-50);
+  --color-ring: var(--color-zinc-700);
+  --radius: 0.5rem;
+}
+
+/* Light mode overrides */
+:root:not(.dark) {
+  --color-background: white;
+  --color-foreground: var(--color-zinc-950);
+  --color-muted: var(--color-zinc-100);
+  --color-muted-foreground: var(--color-zinc-500);
+  --color-card: white;
+  --color-card-foreground: var(--color-zinc-950);
+  --color-border: var(--color-zinc-200);
+  --color-input: var(--color-zinc-200);
+  --color-primary: var(--color-zinc-900);
+  --color-primary-foreground: var(--color-zinc-50);
+  --color-secondary: var(--color-zinc-100);
+  --color-secondary-foreground: var(--color-zinc-900);
+  --color-accent: var(--color-zinc-100);
+  --color-accent-foreground: var(--color-zinc-900);
+  --color-ring: var(--color-zinc-300);
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+}
+
+/* Streaming cursor animation */
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+.streaming-cursor::after {
+  content: "\2588";
+  animation: blink 530ms step-end infinite;
+}
+
+/* Status dot pulse */
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+.status-pulse {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* Safe area padding */
+.safe-area-bottom {
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+}
+.safe-area-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+/* Screen-reader only utility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}

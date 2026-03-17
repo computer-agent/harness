@@ -13,6 +13,9 @@ Tools are in-process MCP servers, one per domain. Each can be enabled/disabled v
 | **tasks** | Lightweight task tracking | Agent-scoped |
 | **introspection** | Read/propose changes to own identity | Agent's definition file |
 | **models** | Query other Claude models | Anthropic API |
+| **ask-user** | Structured multi-choice questions to the user mid-execution | TUI |
+
+> **Note:** `ask-user` is the SDK built-in `AskUserQuestion` tool — the one SDK tool the harness uses directly rather than reimplementing as a custom MCP server. It is intercepted via `canUseTool` and rendered as an interactive selector in the TUI.
 
 ## Design Principle
 

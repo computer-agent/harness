@@ -20,6 +20,7 @@ import { loadAgentEnv } from "./env.js";
 import { classifyError } from "./errors.js";
 import type { AgentManifest } from "./manifest.js";
 import { MessageBuffer } from "./message-buffer.js";
+import { type PersistedMessage, appendMessage, loadMessages } from "./message-store.js";
 import {
   createSessionMeta,
   deleteSession,
@@ -53,6 +54,7 @@ interface ActiveConversation {
   agentId: string;
   agentContext: AgentContext;
   sessionId: string | null;
+  sdkSessionConfirmed: boolean; // true after SDK init event confirms the session
   activeQuery: Query | null;
   messageBuffer: MessageBuffer;
   user: AccessUser;
@@ -211,6 +213,22 @@ function registerSessionRoutes(app: FastifyInstance, opts: ServeOptions) {
     return reply.code(201).send(meta);
   });
 
+  app.get("/api/sessions/:id/messages", async (request, reply) => {
+    const user = authenticateRequest(request as any, opts.access);
+    if (!user) return reply.code(401).send({ error: "Invalid or missing token" });
+
+    const { id } = request.params as { id: string };
+    const agentId = (request.query as Record<string, string>).agent;
+    if (!agentId) return reply.code(400).send({ error: "agent query parameter required" });
+
+    const agentCtx = resolveAgentSafe(agentId);
+    if (!agentCtx) return reply.code(404).send({ error: "Agent not found" });
+
+    const sessionDirs = sessionDirsForUser(agentCtx, user);
+    const messages = await loadMessages(sessionDirs, id);
+    return messages;
+  });
+
   app.delete("/api/sessions/:id", async (request, reply) => {
     const user = authenticateRequest(request as any, opts.access);
     if (!user) return reply.code(401).send({ error: "Invalid or missing token" });
@@ -274,6 +292,7 @@ async function handleSubscribe(
     agentId: msg.agentId,
     agentContext,
     sessionId,
+    sdkSessionConfirmed: !!sessionId, // true if subscribing with an existing session ID (from a prior SDK session)
     activeQuery: null,
     messageBuffer,
     user,
@@ -316,10 +335,14 @@ async function handleMessage(
   const cwd = agentContext.workspaceDir;
   const agentEnv = loadAgentEnv(agentContext.agentDir);
 
-  const options = buildOptions(
+  // Only resume if we have a session ID that came from the SDK (not a pre-created REST session).
+  // If resume fails with "No conversation found", retry without resume.
+  let resumeId = conversation.sdkSessionConfirmed ? conversation.sessionId ?? undefined : undefined;
+
+  let options = buildOptions(
     agentContext,
     {
-      resume: conversation.sessionId ?? undefined,
+      resume: resumeId,
       systemPrompt,
       cwd,
       agentEnv,
@@ -328,18 +351,53 @@ async function handleMessage(
     config,
   );
 
-  const q = sendMessage(msg.content, options);
+  let q: ReturnType<typeof sendMessage>;
+  try {
+    q = sendMessage(msg.content, options);
+    // Peek at the first message to detect session-not-found errors early
+    // (the SDK throws synchronously or on first iteration)
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (resumeId && errMsg.includes("No conversation found")) {
+      // Retry without resume — treat as new conversation
+      options = buildOptions(agentContext, { systemPrompt, cwd, agentEnv, toolFilter }, config);
+      q = sendMessage(msg.content, options);
+    } else {
+      throw err;
+    }
+  }
   conversation.activeQuery = q;
 
   let responseBuffer = "";
   let wasInterrupted = false;
   const accumulatedUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+  const toolCallNames: { name: string; status: string }[] = [];
+  let userMessagePersisted = false;
+
+  // Helper: persist the user message once we have a confirmed session ID
+  const persistUserMessage = async () => {
+    if (userMessagePersisted || !conversation.sessionId) return;
+    userMessagePersisted = true;
+    const sessionDirs = sessionDirsForUser(agentContext, user);
+    const userMsg: PersistedMessage = {
+      role: "user",
+      content: msg.content,
+      timestamp: new Date().toISOString(),
+    };
+    await appendMessage(sessionDirs, conversation.sessionId, userMsg);
+  };
+
+  // If resuming an existing session, persist user message immediately
+  if (conversation.sdkSessionConfirmed && conversation.sessionId) {
+    await persistUserMessage();
+  }
 
   try {
     for await (const sdkMsg of q) {
       // Capture session ID from init
       if (sdkMsg.type === "system" && (sdkMsg as any).subtype === "init" && sdkMsg.session_id) {
         conversation.sessionId = sdkMsg.session_id;
+        conversation.sdkSessionConfirmed = true;
         // Register the buffer under the real session ID
         const key = bufferKey(conversation.agentId, sdkMsg.session_id, user.name);
         if (!conversationBuffers.has(key)) {
@@ -349,6 +407,7 @@ async function handleMessage(
         const sessionDirs = sessionDirsForUser(agentContext, user);
         const meta = createSessionMeta(sdkMsg.session_id, msg.content);
         await saveSession(sessionDirs, meta);
+        await persistUserMessage();
       }
 
       // Stream events → WS frames
@@ -384,6 +443,7 @@ async function handleMessage(
           conversation.messageBuffer.push(frame);
           ws.send(JSON.stringify(frame));
           ws.send(JSON.stringify({ type: "status", status: "tool_use" }));
+          toolCallNames.push({ name: toolName, status: "complete" });
         }
 
         // Tool input streaming
@@ -441,7 +501,9 @@ async function handleMessage(
         );
       }
 
-      // Assistant complete message — accumulate usage
+      // Assistant turn complete — accumulate usage but DON'T send assistant_message yet.
+      // In multi-turn tool use, there are multiple `assistant` events (one per API call).
+      // We send ONE assistant_message after the loop ends (with the full accumulated content).
       if (sdkMsg.type === "assistant") {
         const usage = (sdkMsg as any).message?.usage;
         if (usage) {
@@ -450,6 +512,7 @@ async function handleMessage(
           accumulatedUsage.cacheReadTokens += usage.cache_read_input_tokens ?? 0;
           accumulatedUsage.cacheCreationTokens += usage.cache_creation_input_tokens ?? 0;
         }
+        // Extract text from the message content as fallback (if streaming didn't capture it)
         if (!responseBuffer) {
           const text = (sdkMsg as any).message?.content
             ?.filter((block: any) => block.type === "text")
@@ -457,21 +520,6 @@ async function handleMessage(
             .join("");
           if (text) responseBuffer = text;
         }
-        const frame: WsAssistantMessage = {
-          type: "assistant_message",
-          id: conversation.messageBuffer.nextId(),
-          content: responseBuffer,
-          usage: usage
-            ? {
-                inputTokens: usage.input_tokens ?? 0,
-                outputTokens: usage.output_tokens ?? 0,
-                cacheReadTokens: usage.cache_read_input_tokens ?? 0,
-                cacheCreationTokens: usage.cache_creation_input_tokens ?? 0,
-              }
-            : undefined,
-        };
-        conversation.messageBuffer.push(frame);
-        ws.send(JSON.stringify(frame));
       }
 
       // Result (end of turn)
@@ -491,6 +539,35 @@ async function handleMessage(
   }
 
   conversation.activeQuery = null;
+
+  // Send ONE assistant_message with the final accumulated content (after all tool-use turns)
+  if (responseBuffer) {
+    const frame: WsAssistantMessage = {
+      type: "assistant_message",
+      id: conversation.messageBuffer.nextId(),
+      content: responseBuffer,
+      usage: {
+        inputTokens: accumulatedUsage.inputTokens,
+        outputTokens: accumulatedUsage.outputTokens,
+        cacheReadTokens: accumulatedUsage.cacheReadTokens,
+        cacheCreationTokens: accumulatedUsage.cacheCreationTokens,
+      },
+    };
+    conversation.messageBuffer.push(frame);
+    ws.send(JSON.stringify(frame));
+
+    // Persist assistant message to disk
+    if (conversation.sessionId) {
+      const sessionDirs = sessionDirsForUser(agentContext, user);
+      const assistantMsg: PersistedMessage = {
+        role: "assistant",
+        content: responseBuffer,
+        timestamp: new Date().toISOString(),
+        ...(toolCallNames.length > 0 ? { toolCalls: toolCallNames } : {}),
+      };
+      await appendMessage(sessionDirs, conversation.sessionId, assistantMsg);
+    }
+  }
 
   // Record usage
   if (conversation.sessionId) {

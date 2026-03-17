@@ -41,9 +41,9 @@ Each sub-agent specifies `maxTurns` to prevent runaway loops and `disallowedTool
 
 | Sub-agent | maxTurns | disallowedTools |
 |-----------|----------|-----------------|
-| researcher | 30 | file write, shell exec |
-| deep-thinker | 15 | file write, shell exec |
-| writer | 20 | shell exec |
+| researcher | 30 | file write, shell exec, ask user |
+| deep-thinker | 15 | file write, shell exec, ask user |
+| writer | 20 | shell exec, ask user |
 
 ## Persistent Memory
 

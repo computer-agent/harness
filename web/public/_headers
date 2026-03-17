@@ -1,0 +1,6 @@
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: microphone=(self), camera=()
+  Content-Security-Policy: default-src 'self'; connect-src 'self' wss://*.mastersof.ai https://*.mastersof.ai; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; media-src 'self' blob:

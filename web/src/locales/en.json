@@ -1,0 +1,85 @@
+{
+  "app": {
+    "title": "Masters of AI"
+  },
+  "auth": {
+    "tokenPlaceholder": "Enter your access token",
+    "continue": "Continue",
+    "invalidToken": "Invalid token. Please check and try again.",
+    "validating": "Validating..."
+  },
+  "agents": {
+    "chooseAgent": "Choose an agent",
+    "noAgents": "No agents available. Contact your administrator.",
+    "loading": "Loading agents..."
+  },
+  "conversations": {
+    "newChat": "New chat",
+    "noConversations": "No conversations yet. Start one!",
+    "deleteTitle": "Delete conversation?",
+    "deleteDescription": "This action cannot be undone.",
+    "deleteConfirm": "Delete",
+    "deleteCancel": "Cancel",
+    "timeJustNow": "Just now",
+    "loading": "Loading conversations..."
+  },
+  "chat": {
+    "placeholder": "Type a message...",
+    "send": "Send",
+    "stop": "Stop",
+    "scrollToBottom": "Scroll to bottom",
+    "emptyState": "Start a conversation with {{agentName}}",
+    "starters": "Suggested prompts",
+    "copyCode": "Copy code",
+    "codeCopied": "Copied!",
+    "showMore": "Show more",
+    "showLess": "Show less"
+  },
+  "toolCalls": {
+    "executing": "Running...",
+    "complete": "Complete",
+    "error": "Error",
+    "approve": "Allow",
+    "deny": "Deny",
+    "readFile": "Reading: {{path}}",
+    "writeFile": "Writing: {{path}}",
+    "editFile": "Editing: {{path}}",
+    "bash": "Running: {{command}}",
+    "search": "Searching: {{query}}",
+    "fetch": "Fetching: {{url}}"
+  },
+  "connection": {
+    "connected": "Connected",
+    "connecting": "Connecting...",
+    "reconnecting": "Reconnecting...",
+    "disconnected": "Disconnected"
+  },
+  "errors": {
+    "rateLimited": "Too many requests. Please wait {{seconds}} seconds.",
+    "serverDown": "Server unavailable. Reconnecting...",
+    "sessionExpired": "Session expired. Starting a new conversation.",
+    "authFailed": "Authentication failed. Please sign in again.",
+    "modelError": "An error occurred. Please try again.",
+    "retry": "Retry",
+    "networkError": "Network error. Check your connection."
+  },
+  "voice": {
+    "startListening": "Start voice input",
+    "stopListening": "Stop voice input",
+    "transcribing": "Transcribing...",
+    "micDenied": "Microphone access denied.",
+    "notSupported": "Voice input is not supported in this browser."
+  },
+  "theme": {
+    "dark": "Dark mode",
+    "light": "Light mode",
+    "system": "System theme"
+  },
+  "common": {
+    "back": "Back",
+    "close": "Close",
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success"
+  }
+}

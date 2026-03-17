@@ -30,6 +30,11 @@
       "semicolons": "always"
     }
   },
+  "css": {
+    "parser": {
+      "cssModules": false
+    }
+  },
   "assist": {
     "enabled": true,
     "actions": {
@@ -37,5 +42,25 @@
         "organizeImports": "on"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["web/**"],
+      "javascript": {
+        "jsxRuntime": "transparent"
+      },
+      "css": {
+        "parser": {
+          "tailwindDirectives": true
+        }
+      },
+      "linter": {
+        "rules": {
+          "correctness": {
+            "useExhaustiveDependencies": "off"
+          }
+        }
+      }
+    }
+  ]
 }

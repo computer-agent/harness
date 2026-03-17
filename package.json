@@ -41,7 +41,9 @@
     "lint": "biome check",
     "lint:fix": "biome check --write",
     "typecheck": "tsc --noEmit",
-    "check": "biome check && tsc --noEmit"
+    "check": "biome check && tsc --noEmit",
+    "knip": "npx knip",
+    "check:all": "biome check && tsc --noEmit && cd web && tsc -b && cd .. && npx knip"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.76",

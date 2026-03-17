@@ -33,6 +33,7 @@ Your job is to search, read, and return concise, relevant findings. You do NOT m
       `mcp__${toolPrefix}shell__shell_exec`,
       `mcp__${toolPrefix}workspace__write_file`,
       `mcp__${toolPrefix}workspace__edit_file`,
+      "AskUserQuestion",
     ],
   };
 }

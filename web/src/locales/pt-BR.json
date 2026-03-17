@@ -1,0 +1,85 @@
+{
+  "app": {
+    "title": "Masters of AI"
+  },
+  "auth": {
+    "tokenPlaceholder": "Insira seu token de acesso",
+    "continue": "Continuar",
+    "invalidToken": "Token inv\u00e1lido. Verifique e tente novamente.",
+    "validating": "Validando..."
+  },
+  "agents": {
+    "chooseAgent": "Escolha um agente",
+    "noAgents": "Nenhum agente dispon\u00edvel. Entre em contato com o administrador.",
+    "loading": "Carregando agentes..."
+  },
+  "conversations": {
+    "newChat": "Nova conversa",
+    "noConversations": "Nenhuma conversa ainda. Comece uma!",
+    "deleteTitle": "Excluir conversa?",
+    "deleteDescription": "Esta a\u00e7\u00e3o n\u00e3o pode ser desfeita.",
+    "deleteConfirm": "Excluir",
+    "deleteCancel": "Cancelar",
+    "timeJustNow": "Agora mesmo",
+    "loading": "Carregando conversas..."
+  },
+  "chat": {
+    "placeholder": "Digite uma mensagem...",
+    "send": "Enviar",
+    "stop": "Parar",
+    "scrollToBottom": "Ir para o final",
+    "emptyState": "Inicie uma conversa com {{agentName}}",
+    "starters": "Sugest\u00f5es",
+    "copyCode": "Copiar c\u00f3digo",
+    "codeCopied": "Copiado!",
+    "showMore": "Ver mais",
+    "showLess": "Ver menos"
+  },
+  "toolCalls": {
+    "executing": "Executando...",
+    "complete": "Conclu\u00eddo",
+    "error": "Erro",
+    "approve": "Permitir",
+    "deny": "Negar",
+    "readFile": "Lendo: {{path}}",
+    "writeFile": "Escrevendo: {{path}}",
+    "editFile": "Editando: {{path}}",
+    "bash": "Executando: {{command}}",
+    "search": "Pesquisando: {{query}}",
+    "fetch": "Buscando: {{url}}"
+  },
+  "connection": {
+    "connected": "Conectado",
+    "connecting": "Conectando...",
+    "reconnecting": "Reconectando...",
+    "disconnected": "Desconectado"
+  },
+  "errors": {
+    "rateLimited": "Muitas solicita\u00e7\u00f5es. Aguarde {{seconds}} segundos.",
+    "serverDown": "Servidor indispon\u00edvel. Reconectando...",
+    "sessionExpired": "Sess\u00e3o expirada. Iniciando nova conversa.",
+    "authFailed": "Falha na autentica\u00e7\u00e3o. Fa\u00e7a login novamente.",
+    "modelError": "Ocorreu um erro. Tente novamente.",
+    "retry": "Tentar novamente",
+    "networkError": "Erro de rede. Verifique sua conex\u00e3o."
+  },
+  "voice": {
+    "startListening": "Iniciar entrada por voz",
+    "stopListening": "Parar entrada por voz",
+    "transcribing": "Transcrevendo...",
+    "micDenied": "Acesso ao microfone negado.",
+    "notSupported": "Entrada por voz n\u00e3o suportada neste navegador."
+  },
+  "theme": {
+    "dark": "Modo escuro",
+    "light": "Modo claro",
+    "system": "Tema do sistema"
+  },
+  "common": {
+    "back": "Voltar",
+    "close": "Fechar",
+    "loading": "Carregando...",
+    "error": "Erro",
+    "success": "Sucesso"
+  }
+}
