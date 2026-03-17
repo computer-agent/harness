@@ -75,6 +75,10 @@
     "light": "Modo claro",
     "system": "Tema do sistema"
   },
+  "mentions": {
+    "noAgents": "Nenhum agente encontrado",
+    "agentList": "Lista de agentes"
+  },
   "common": {
     "back": "Voltar",
     "close": "Fechar",

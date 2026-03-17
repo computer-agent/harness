@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import useWebSocket, { ReadyState } from "react-use-websocket";
+import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { TOKEN_KEY, WS_URL } from "@/lib/constants";
 import type { WsClientMsg, WsServerMsg } from "@/lib/ws-client";
+import { useAuthStore } from "@/stores/auth";
 import { conversationKey, useChatStore } from "@/stores/chat";
 import type { ChatMessage, ToolCall } from "@/types";
 
 export type ConnectionState = "connected" | "connecting" | "reconnecting" | "disconnected";
 
 export function useAgentChat(agentId: string | undefined, sessionId: string | null) {
+  const { t } = useTranslation();
   let token: string | null = null;
   try {
     token = sessionStorage.getItem(TOKEN_KEY);
@@ -166,7 +170,7 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
         break;
 
       case "error":
-        store.addError(msg.message);
+        handleWsError(msg.code, msg.message);
         break;
 
       case "replay":
@@ -181,10 +185,68 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
     }
   }, [lastJsonMessage]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Handle different WS error codes with appropriate UI feedback
+  const handleWsError = useCallback(
+    (code: string, message: string) => {
+      switch (code) {
+        case "session_expired":
+          toast.warning(t("errors.sessionExpired"));
+          // Auto-create new session: clear sessionId but keep agentId.
+          // Old messages remain visible (read-only).
+          sessionIdRef.current = null;
+          if (agentIdRef.current) {
+            sendSubscribe(agentIdRef.current, null, 0);
+          }
+          break;
+
+        case "auth_failed":
+          toast.error(t("errors.authFailed"));
+          useAuthStore.getState().clearToken();
+          break;
+
+        case "rate_limited": {
+          // Extract seconds from message if available (e.g. "retry after 30s")
+          const match = message.match(/(\d+)/);
+          const seconds = match ? Number.parseInt(match[1], 10) : 60;
+          toast.error(t("errors.rateLimited", { seconds }), {
+            duration: seconds * 1000,
+          });
+          const until = Date.now() + seconds * 1000;
+          store.setRateLimitedUntil(until);
+          store.addError(t("errors.rateLimited", { seconds }), code);
+          // Clear rate limit after countdown
+          setTimeout(() => {
+            useChatStore.getState().setRateLimitedUntil(null);
+          }, seconds * 1000);
+          break;
+        }
+
+        case "model_error":
+        case "overloaded":
+        case "internal_error":
+          // Show as in-chat error with retry capability
+          store.addError(message || t("errors.modelError"), code);
+          break;
+
+        default:
+          // Unknown error codes: show in chat with retry
+          store.addError(message || t("errors.modelError"), code);
+          break;
+      }
+    },
+    [t, store, sendSubscribe],
+  );
+
   const sendMessage = useCallback(
     (content: string) => {
       if (readyState !== ReadyState.OPEN) {
         store.queuePendingMessage(content);
+        return;
+      }
+      // Block sends during rate limit
+      if (store.rateLimitedUntil && Date.now() < store.rateLimitedUntil) {
+        const remaining = Math.ceil((store.rateLimitedUntil - Date.now()) / 1000);
+        toast.warning(t("errors.rateLimited", { seconds: remaining }));
         return;
       }
       // Capture the agent ID at send time so we can guard the result handler (FIX-06)
@@ -192,8 +254,15 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
       store.addUserMessage(content);
       sendJsonMessage({ type: "message", content });
     },
-    [readyState, sendJsonMessage, store],
+    [readyState, sendJsonMessage, store, t],
   );
+
+  const retryLastMessage = useCallback(() => {
+    const content = store.retryLastMessage();
+    if (content) {
+      sendMessage(content);
+    }
+  }, [store, sendMessage]);
 
   const interrupt = useCallback(() => {
     sendJsonMessage({ type: "interrupt" });
@@ -214,8 +283,10 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
     isStreaming: store.isStreaming,
     agentStatus: store.agentStatus,
     connectionState,
+    rateLimitedUntil: store.rateLimitedUntil,
     sendMessage,
     interrupt,
+    retryLastMessage,
     sessionId: sessionIdRef.current,
   };
 }

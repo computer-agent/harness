@@ -22,6 +22,8 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   isStreaming?: boolean;
+  isError?: boolean;
+  errorCode?: string;
   toolCalls?: ToolCall[];
 }
 

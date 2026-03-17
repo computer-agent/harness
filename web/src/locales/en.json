@@ -75,6 +75,10 @@
     "light": "Light mode",
     "system": "System theme"
   },
+  "mentions": {
+    "noAgents": "No agents found",
+    "agentList": "Agent list"
+  },
   "common": {
     "back": "Back",
     "close": "Close",

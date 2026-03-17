@@ -7,7 +7,9 @@ interface ChatStore {
   activeKey: string;
   pendingMessages: string[];
   lastMessageId: number;
+  lastUserMessage: string | null;
   isStreaming: boolean;
+  rateLimitedUntil: number | null;
   agentStatus: "idle" | "thinking" | "tool_use" | "responding" | "interrupted";
 
   // Per-session message cache (survives navigation between conversations)
@@ -22,7 +24,10 @@ interface ChatStore {
   updateToolInput: (toolId: string, partialJson: string) => void;
   setStatus: (status: ChatStore["agentStatus"]) => void;
   setStreaming: (v: boolean) => void;
-  addError: (message: string) => void;
+  addError: (message: string, errorCode?: string) => void;
+  removeErrorMessage: (id: string) => void;
+  retryLastMessage: () => string | null;
+  setRateLimitedUntil: (until: number | null) => void;
   clearMessages: () => void;
   updateActiveKey: (key: string) => void;
   loadHistory: (messages: ChatMessage[]) => void;
@@ -41,7 +46,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   activeKey: "",
   pendingMessages: [],
   lastMessageId: 0,
+  lastUserMessage: null,
   isStreaming: false,
+  rateLimitedUntil: null,
   agentStatus: "idle",
   cache: {},
 
@@ -87,7 +94,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       content,
       timestamp: new Date().toISOString(),
     };
-    set((s) => ({ messages: [...s.messages, msg] }));
+    set((s) => ({ messages: [...s.messages, msg], lastUserMessage: content }));
   },
 
   startAssistantMessage: () => {
@@ -160,17 +167,37 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   setStatus: (status) => set({ agentStatus: status }),
   setStreaming: (v) => set({ isStreaming: v }),
 
-  addError: (message) => {
+  addError: (message, errorCode) => {
     const msg: ChatMessage = {
       id: `error-${Date.now()}`,
       role: "assistant",
       content: message,
       timestamp: new Date().toISOString(),
+      isError: true,
+      errorCode,
     };
     set((s) => ({ messages: [...s.messages, msg], isStreaming: false, agentStatus: "idle" }));
   },
 
-  clearMessages: () => set({ messages: [], lastMessageId: 0, isStreaming: false, agentStatus: "idle" }),
+  removeErrorMessage: (id) => {
+    set((s) => ({ messages: s.messages.filter((m) => m.id !== id) }));
+  },
+
+  retryLastMessage: () => {
+    const { lastUserMessage, messages } = get();
+    if (!lastUserMessage) return null;
+    // Remove the most recent error message (the one the user is retrying from)
+    const lastErrorIdx = messages.findLastIndex((m) => m.isError);
+    if (lastErrorIdx >= 0) {
+      set((s) => ({ messages: s.messages.filter((_, i) => i !== lastErrorIdx) }));
+    }
+    return lastUserMessage;
+  },
+
+  setRateLimitedUntil: (until) => set({ rateLimitedUntil: until }),
+
+  clearMessages: () =>
+    set({ messages: [], lastMessageId: 0, lastUserMessage: null, isStreaming: false, agentStatus: "idle" }),
 
   loadHistory: (messages) => {
     const key = get().activeKey;

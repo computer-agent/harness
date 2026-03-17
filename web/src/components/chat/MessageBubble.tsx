@@ -1,18 +1,16 @@
-import { Check, Copy } from "lucide-react";
+import { AlertTriangle, Check, Copy, RotateCcw } from "lucide-react";
 import { Component, type ComponentProps, type ErrorInfo, memo, type ReactNode, useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import Markdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@/types";
 import { ToolCallBlock } from "./ToolCallBlock";
 
 // FIX-07: Error boundary to prevent markdown parse failures from crashing the chat UI
-class MarkdownErrorBoundary extends Component<
-  { children: ReactNode; fallbackContent: string },
-  { hasError: boolean }
-> {
+class MarkdownErrorBoundary extends Component<{ children: ReactNode; fallbackContent: string }, { hasError: boolean }> {
   constructor(props: { children: ReactNode; fallbackContent: string }) {
     super(props);
     this.state = { hasError: false };
@@ -36,12 +34,42 @@ class MarkdownErrorBoundary extends Component<
 
 // FIX-16: Memoize to avoid re-rendering every bubble when a new message arrives.
 // ToolCallBlock is intentionally NOT memoized — it has dynamic internal state.
-export const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMessage }) {
+export const MessageBubble = memo(function MessageBubble({
+  message,
+  onRetry,
+}: {
+  message: ChatMessage;
+  onRetry?: () => void;
+}) {
+  const { t } = useTranslation();
+
   if (message.role === "user") {
     return (
       <div className="flex justify-end px-4 py-1" data-role="user">
         <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-blue-600 px-4 py-2.5 text-sm text-white sm:max-w-[85%]">
           {message.content}
+        </div>
+      </div>
+    );
+  }
+
+  // Error message: red left border, muted red background, optional retry button
+  if (message.isError) {
+    return (
+      <div className="flex gap-2 px-4 py-1" data-role="error">
+        <div className="max-w-[80%] rounded-lg border-l-4 border-red-500 bg-red-950/20 px-4 py-3 text-sm sm:max-w-[90%]">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+            <div className="flex-1">
+              <p className="text-red-300">{message.content}</p>
+              {onRetry && (
+                <Button variant="outline" size="sm" onClick={onRetry} className="mt-2 gap-1.5 text-xs">
+                  <RotateCcw className="h-3 w-3" />
+                  {t("errors.retry")}
+                </Button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     );

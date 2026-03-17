@@ -17,7 +17,10 @@ interface ChatPanelProps {
 
 export function ChatPanel({ agent, sessionId, onBack }: ChatPanelProps) {
   const { t } = useTranslation();
-  const { messages, isStreaming, connectionState, sendMessage, interrupt } = useAgentChat(agent.id, sessionId);
+  const { messages, isStreaming, connectionState, rateLimitedUntil, sendMessage, interrupt, retryLastMessage } =
+    useAgentChat(agent.id, sessionId);
+
+  const isRateLimited = rateLimitedUntil !== null && Date.now() < rateLimitedUntil;
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -84,7 +87,7 @@ export function ChatPanel({ agent, sessionId, onBack }: ChatPanelProps) {
         ) : (
           <div className="py-4">
             {messages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} />
+              <MessageBubble key={msg.id} message={msg} onRetry={msg.isError ? retryLastMessage : undefined} />
             ))}
             <div ref={messagesEndRef} />
           </div>
@@ -111,7 +114,7 @@ export function ChatPanel({ agent, sessionId, onBack }: ChatPanelProps) {
         onSend={sendMessage}
         onInterrupt={interrupt}
         isStreaming={isStreaming}
-        disabled={connectionState !== "connected"}
+        disabled={connectionState !== "connected" || isRateLimited}
       />
     </div>
   );

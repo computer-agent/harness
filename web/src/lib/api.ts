@@ -10,6 +10,24 @@ function getToken(): string | null {
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/** Custom error for rate limiting, carries the Retry-After seconds */
+export class RateLimitError extends Error {
+  retryAfterSeconds: number;
+  constructor(seconds: number) {
+    super(`rate_limited:${seconds}`);
+    this.name = "RateLimitError";
+    this.retryAfterSeconds = seconds;
+  }
+}
+
+/** Custom error for network failures (fetch threw before we got a response) */
+export class NetworkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NetworkError";
+  }
+}
+
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
@@ -26,21 +44,25 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     res = await fetch(`${API_URL}${path}`, {
       ...opts,
       headers,
-      signal: opts.signal
-        ? AbortSignal.any([opts.signal, controller.signal])
-        : controller.signal,
+      signal: opts.signal ? AbortSignal.any([opts.signal, controller.signal]) : controller.signal,
     });
   } catch (err) {
     clearTimeout(timeoutId);
     if (controller.signal.aborted) {
-      throw new Error(`Request to ${path} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+      throw new NetworkError(`Request to ${path} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
     }
-    throw err;
+    throw new NetworkError(err instanceof Error ? err.message : "Network request failed");
   }
   clearTimeout(timeoutId);
 
   if (res.status === 401 || res.status === 403) {
     throw new Error("auth_failed");
+  }
+
+  if (res.status === 429) {
+    const retryAfter = res.headers.get("Retry-After");
+    const seconds = retryAfter ? Number.parseInt(retryAfter, 10) : 60;
+    throw new RateLimitError(Number.isNaN(seconds) ? 60 : seconds);
   }
 
   if (!res.ok) {
