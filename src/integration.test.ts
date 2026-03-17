@@ -247,6 +247,96 @@ System prompt body.`;
     assert.strictEqual(manifest.body, "# Full Agent\n\nSystem prompt body.");
   });
 
+  it("agent with tools.allow=[single domain] gets only that domain", async () => {
+    const content = `---
+tools:
+  allow: [web]
+---
+
+# Web Only Agent
+
+Only web tools.`;
+
+    const dir = createAgent("web-only", content);
+    const { manifest } = await loadAgentManifest(dir);
+    const toolFilter: ToolFilter | undefined = manifest.frontmatter.tools
+      ? { allow: manifest.frontmatter.tools.allow, deny: manifest.frontmatter.tools.deny }
+      : undefined;
+
+    assert.strictEqual(isToolEnabled("web", testConfig, toolFilter), true);
+    for (const domain of ["memory", "workspace", "shell", "tasks", "introspection", "models"] as const) {
+      assert.strictEqual(isToolEnabled(domain, testConfig, toolFilter), false, `${domain} should be disabled`);
+    }
+  });
+
+  it("handles agent with empty tags and starters arrays", async () => {
+    const content = `---
+tags: []
+starters: []
+---
+
+# Empty Arrays
+
+Agent with explicitly empty arrays.`;
+
+    const dir = createAgent("empty-arrays", content);
+    const { manifest, warnings } = await loadAgentManifest(dir);
+
+    assert.strictEqual(warnings.length, 0);
+    assert.deepStrictEqual(manifest.frontmatter.tags, []);
+    assert.deepStrictEqual(manifest.frontmatter.starters, []);
+  });
+
+  it("loadIdentity strips frontmatter even when validation fails", async () => {
+    const content = `---
+tools:
+  allow: [nonexistent_tool]
+---
+
+# Bad Tools Agent
+
+System prompt body.`;
+
+    const dir = createAgent("bad-strip", content);
+    const identity = await loadIdentity(join(dir, "IDENTITY.md"));
+
+    // Frontmatter is stripped even though it doesn't validate
+    assert.ok(!identity.includes("---"));
+    assert.ok(!identity.includes("nonexistent_tool"));
+    assert.ok(identity.includes("# Bad Tools Agent"));
+    assert.ok(identity.includes("System prompt body."));
+  });
+
+  it("frontmatter with sub-agent config round-trips correctly through pipeline", async () => {
+    const content = `---
+name: Orchestrator
+agents:
+  researcher:
+    model: sonnet
+    maxTurns: 30
+    tools:
+      deny: [shell]
+  writer:
+    model: opus
+    maxTurns: 20
+---
+
+# Orchestrator
+
+I manage sub-agents.`;
+
+    const dir = createAgent("orchestrator", content);
+    const { manifest, warnings } = await loadAgentManifest(dir);
+
+    assert.strictEqual(warnings.length, 0);
+    assert.strictEqual(manifest.frontmatter.agents?.researcher?.model, "sonnet");
+    assert.strictEqual(manifest.frontmatter.agents?.researcher?.maxTurns, 30);
+    assert.deepStrictEqual(manifest.frontmatter.agents?.researcher?.tools?.deny, ["shell"]);
+    assert.strictEqual(manifest.frontmatter.agents?.writer?.model, "opus");
+    assert.strictEqual(manifest.frontmatter.agents?.writer?.maxTurns, 20);
+    assert.strictEqual(manifest.body, "# Orchestrator\n\nI manage sub-agents.");
+  });
+
   it("cleanup", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });

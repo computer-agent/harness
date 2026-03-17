@@ -75,4 +75,25 @@ describe("isToolEnabled", () => {
       assert.strictEqual(isToolEnabled(domain, allEnabledConfig), true);
     }
   });
+
+  it("returns false when global config disables a domain, no filter", () => {
+    assert.strictEqual(isToolEnabled("shell", shellDisabledConfig), false);
+  });
+
+  it("deny filter on globally disabled domain returns false", () => {
+    // Shell is globally disabled; deny filter for something else shouldn't enable it
+    assert.strictEqual(isToolEnabled("shell", shellDisabledConfig, { deny: ["memory"] }), false);
+  });
+
+  it("allow with empty array blocks all domains", () => {
+    assert.strictEqual(isToolEnabled("memory", allEnabledConfig, { allow: [] }), false);
+    assert.strictEqual(isToolEnabled("web", allEnabledConfig, { allow: [] }), false);
+    assert.strictEqual(isToolEnabled("shell", allEnabledConfig, { allow: [] }), false);
+  });
+
+  it("deny with empty array allows all domains", () => {
+    assert.strictEqual(isToolEnabled("memory", allEnabledConfig, { deny: [] }), true);
+    assert.strictEqual(isToolEnabled("web", allEnabledConfig, { deny: [] }), true);
+    assert.strictEqual(isToolEnabled("shell", allEnabledConfig, { deny: [] }), true);
+  });
 });

@@ -55,6 +55,57 @@ describe("parseFrontmatter", () => {
     // Leading newlines after --- are stripped
     assert.strictEqual(result.body, "# Title\n\nParagraph.");
   });
+
+  it("returns null frontmatter for \\r\\n line endings (no CRLF closing match)", () => {
+    // The parser finds the opening ---\r\n but cannot match the closing \n---\n with CRLF content,
+    // so it treats the entire input as body with no frontmatter.
+    const input = "---\r\nname: X\r\n---\r\n\r\nBody";
+    const result = parseFrontmatter(input);
+    assert.strictEqual(result.frontmatter, null);
+    assert.strictEqual(result.body, input);
+  });
+
+  it("returns null frontmatter when opening --- is not at char 0", () => {
+    const input = " ---\nname: X\n---\n\nBody";
+    const result = parseFrontmatter(input);
+    assert.strictEqual(result.frontmatter, null);
+    assert.strictEqual(result.body, input);
+  });
+
+  it("returns null frontmatter when no closing delimiter found", () => {
+    const input = "---\nname: X\nNo closing here";
+    const result = parseFrontmatter(input);
+    assert.strictEqual(result.frontmatter, null);
+    assert.strictEqual(result.body, input);
+  });
+
+  it("handles frontmatter at EOF with no trailing newline", () => {
+    const input = "---\nname: X\n---";
+    const result = parseFrontmatter(input);
+    assert.deepStrictEqual(result.frontmatter, { name: "X" });
+    assert.strictEqual(result.body, "");
+  });
+
+  it("handles frontmatter where YAML parses to a scalar (not object)", () => {
+    const input = "---\njust a string\n---\n";
+    const result = parseFrontmatter(input);
+    assert.strictEqual(result.frontmatter, null);
+    assert.strictEqual(result.body, input);
+  });
+
+  it("handles frontmatter with only whitespace in YAML block", () => {
+    const input = "---\n  \n---\n\nBody";
+    const result = parseFrontmatter(input);
+    assert.strictEqual(result.frontmatter, null);
+    assert.strictEqual(result.body, input);
+  });
+
+  it("strips leading newlines from body after closing delimiter", () => {
+    const input = "---\nname: X\n---\n\n\n\nBody";
+    const result = parseFrontmatter(input);
+    assert.deepStrictEqual(result.frontmatter, { name: "X" });
+    assert.strictEqual(result.body, "Body");
+  });
 });
 
 describe("AgentFrontmatterSchema", () => {
@@ -119,6 +170,50 @@ describe("AgentFrontmatterSchema", () => {
   it("rejects invalid access level", () => {
     const result = AgentFrontmatterSchema.safeParse({ access: "admin" });
     assert.strictEqual(result.success, false);
+  });
+
+  it("rejects sub-agent with negative maxTurns", () => {
+    const result = AgentFrontmatterSchema.safeParse({ agents: { r: { maxTurns: -1 } } });
+    assert.strictEqual(result.success, false);
+  });
+
+  it("rejects sub-agent with non-integer maxTurns", () => {
+    const result = AgentFrontmatterSchema.safeParse({ agents: { r: { maxTurns: 2.5 } } });
+    assert.strictEqual(result.success, false);
+  });
+
+  it("accepts sub-agent tools filter with deny", () => {
+    const result = AgentFrontmatterSchema.parse({ agents: { r: { tools: { deny: ["shell"] } } } });
+    assert.deepStrictEqual(result.agents?.r?.tools?.deny, ["shell"]);
+  });
+
+  it("rejects sub-agent tools with both allow and deny", () => {
+    const result = AgentFrontmatterSchema.safeParse({
+      agents: { r: { tools: { allow: ["web"], deny: ["shell"] } } },
+    });
+    assert.strictEqual(result.success, false);
+  });
+
+  it("applies default mount mode 'ro' when mode omitted", () => {
+    const result = AgentFrontmatterSchema.parse({ sandbox: { mounts: [{ path: "/data" }] } });
+    assert.strictEqual(result.sandbox?.mounts?.[0]?.mode, "ro");
+  });
+
+  it("rejects invalid sandbox network value", () => {
+    const result = AgentFrontmatterSchema.safeParse({ sandbox: { network: "bridge" } });
+    assert.strictEqual(result.success, false);
+  });
+
+  it("rejects invalid mount mode", () => {
+    const result = AgentFrontmatterSchema.safeParse({
+      sandbox: { mounts: [{ path: "/x", mode: "exec" }] },
+    });
+    assert.strictEqual(result.success, false);
+  });
+
+  it("ignores unknown/extra keys (strips them)", () => {
+    const result = AgentFrontmatterSchema.parse({ unknownKey: "value" });
+    assert.strictEqual("unknownKey" in result, false);
   });
 });
 
@@ -212,6 +307,41 @@ across multiple lines.
     const { manifest } = await loadAgentManifest(dir);
 
     assert.strictEqual(manifest.description, "This agent does important things across multiple lines.");
+  });
+
+  it("throws when IDENTITY.md does not exist", async () => {
+    const agentDir = join(tmpDir, "no-identity");
+    mkdirSync(agentDir, { recursive: true });
+    // No IDENTITY.md written
+    await assert.rejects(() => loadAgentManifest(agentDir));
+  });
+
+  it("uses capitalize(id) as displayName when name is absent", async () => {
+    const dir = createTestAgent("helper", "# Helper\n\nSome body.");
+    const { manifest } = await loadAgentManifest(dir);
+    assert.strictEqual(manifest.displayName, "Helper");
+  });
+
+  it("returns empty description when body has no paragraphs (only headings)", async () => {
+    const content = "---\ntags: [test]\n---\n\n# Heading\n\n## Another Heading";
+    const dir = createTestAgent("headings-only", content);
+    const { manifest } = await loadAgentManifest(dir);
+    assert.strictEqual(manifest.description, "");
+  });
+
+  it("derives description from first paragraph, skipping headings and blanks", async () => {
+    const content = "# Title\n\n\nFirst real paragraph.\n\n## Section";
+    const dir = createTestAgent("para-skip", content);
+    const { manifest } = await loadAgentManifest(dir);
+    assert.strictEqual(manifest.description, "First real paragraph.");
+  });
+
+  it("uses id from directory basename, not from frontmatter", async () => {
+    const content = "---\nname: Display Name\n---\n\n# Agent\n\nBody.";
+    const dir = createTestAgent("dir-name", content);
+    const { manifest } = await loadAgentManifest(dir);
+    assert.strictEqual(manifest.id, "dir-name");
+    assert.strictEqual(manifest.displayName, "Display Name");
   });
 
   it("cleanup", () => {
