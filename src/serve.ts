@@ -14,6 +14,7 @@ import {
   userCanAccessAgent,
 } from "./access.js";
 import { buildOptions, buildSystemPrompt, sendMessage } from "./agent.js";
+import { CostTracker } from "./cost.js";
 import { type AgentContext, listAgents, resolveAgent, resolveRemoteAgent } from "./agent-context.js";
 import type { HarnessConfig } from "./config.js";
 import { loadAgentEnv } from "./env.js";
@@ -253,21 +254,52 @@ function registerSessionRoutes(app: FastifyInstance, opts: ServeOptions) {
   });
 }
 
-function registerUsageRoutes(app: FastifyInstance, opts: ServeOptions, usageTracker: UsageTracker) {
+function registerUsageRoutes(app: FastifyInstance, opts: ServeOptions, usageTracker: UsageTracker, costTracker: CostTracker) {
   app.get("/api/usage", async (request, reply) => {
     const user = authenticateRequest(request as any, opts.access);
     if (!user) return reply.code(401).send({ error: "Invalid or missing token" });
 
-    // Only operators (wildcard access) can view usage
-    if (user.agents !== "*") {
-      return reply.code(403).send({ error: "Usage data requires operator access" });
+    const userUsage = costTracker.getUserUsage(user.name);
+    const budget = costTracker.getBudget(user.name);
+
+    // Everyone can see their own usage
+    const result: Record<string, unknown> = {
+      usage: userUsage,
+      budget: {
+        sessionLimit: budget.sessionLimit === Infinity ? "unlimited" : budget.sessionLimit,
+        dailyLimit: budget.dailyLimit === Infinity ? "unlimited" : budget.dailyLimit,
+        monthlyLimit: budget.monthlyLimit === Infinity ? "unlimited" : budget.monthlyLimit,
+      },
+    };
+
+    // Operators get the full summary
+    if (user.agents === "*") {
+      result.summary = usageTracker.summarizeByUser();
+      result.sessions = usageTracker.allSessions();
     }
 
-    const summary = usageTracker.summarizeByUser();
-    return {
-      summary,
-      sessions: usageTracker.allSessions(),
-    };
+    return result;
+  });
+}
+
+function registerAdminRoutes(app: FastifyInstance, opts: ServeOptions, costTracker: CostTracker, logger: Logger) {
+  app.post("/api/admin/users/:id/budget/reset", async (request, reply) => {
+    const user = authenticateRequest(request as any, opts.access);
+    if (!user) return reply.code(401).send({ error: "Invalid or missing token" });
+    if (user.agents !== "*") return reply.code(403).send({ error: "Admin access required" });
+
+    const { id } = request.params as { id: string };
+    const { scope } = (request.body as { scope?: string }) ?? {};
+    const validScopes = ["session", "daily", "monthly", "all"] as const;
+    const resetScope = validScopes.includes(scope as (typeof validScopes)[number])
+      ? (scope as "session" | "daily" | "monthly" | "all")
+      : "all";
+
+    costTracker.resetBudget(id, resetScope);
+    logger.info("cost", "cost.reset", `Budget reset for user ${id}`, {
+      details: { userId: id, scope: resetScope },
+    });
+    return { reset: true, userId: id, scope: resetScope };
   });
 }
 
@@ -333,6 +365,7 @@ async function handleMessage(
   conversation: ActiveConversation,
   config: HarnessConfig,
   usageTracker: UsageTracker,
+  costTracker: CostTracker,
 ): Promise<void> {
   const { agentContext, user } = conversation;
 
@@ -639,6 +672,24 @@ async function handleMessage(
   // Record usage
   if (conversation.sessionId) {
     usageTracker.recordTurn(conversation.sessionId, conversation.agentId, user.name, accumulatedUsage);
+
+    // Record cost and check budget
+    costTracker.recordUsage(user.name, conversation.sessionId, accumulatedUsage.inputTokens, accumulatedUsage.outputTokens);
+    const postBudget = costTracker.checkBudget(user.name, conversation.sessionId);
+    if (postBudget.warnings.length > 0) {
+      ws.send(JSON.stringify({ type: "budget_warning", warnings: postBudget.warnings }));
+    }
+    if (!postBudget.allowed) {
+      ws.send(
+        JSON.stringify({
+          type: "budget_exceeded",
+          reason: postBudget.exceeded!.budget,
+          limit: postBudget.exceeded!.limit,
+          used: postBudget.exceeded!.used,
+          resetsAt: postBudget.exceeded!.resetsAt,
+        }),
+      );
+    }
   }
 
   // Final result frame
@@ -663,7 +714,7 @@ async function handleMessage(
   }
 }
 
-function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageTracker: UsageTracker, logger: Logger, rateLimiter: RateLimiter) {
+function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageTracker: UsageTracker, logger: Logger, rateLimiter: RateLimiter, costTracker: CostTracker) {
   app.register(async (fastify) => {
     fastify.get("/ws", { websocket: true }, (socket, request) => {
       const ws = socket as unknown as WebSocket;
@@ -768,7 +819,21 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
                 }));
                 return;
               }
-              await handleMessage(ws, msg, activeConversation, opts.config, usageTracker);
+              // Pre-flight budget check
+              const budgetCheck = costTracker.checkBudget(user.name, activeConversation.sessionId ?? "");
+              if (!budgetCheck.allowed) {
+                ws.send(
+                  JSON.stringify({
+                    type: "budget_exceeded",
+                    reason: budgetCheck.exceeded!.budget,
+                    limit: budgetCheck.exceeded!.limit,
+                    used: budgetCheck.exceeded!.used,
+                    resetsAt: budgetCheck.exceeded!.resetsAt,
+                  }),
+                );
+                return;
+              }
+              await handleMessage(ws, msg, activeConversation, opts.config, usageTracker, costTracker);
               break;
             }
             case "ping":
@@ -824,6 +889,15 @@ export async function startServer(opts: ServeOptions): Promise<void> {
   const usageTracker = new UsageTracker();
   const rateLimiter = new RateLimiter(opts.config.serve?.rateLimits);
   const logger = new Logger(opts.config.serve?.logging?.level ?? "info");
+
+  // Cost tracking: restore persisted data and sync budgets from access config
+  const costTracker = new CostTracker();
+  await costTracker.restore();
+  costTracker.startPersistence();
+  for (const entry of opts.access.users) {
+    costTracker.setBudget(entry.name, entry.budget);
+  }
+
   logger.info("server", "server.started", "Serve mode started", {
     details: { port: opts.port, host: opts.host },
   });
@@ -862,8 +936,9 @@ export async function startServer(opts: ServeOptions): Promise<void> {
   registerHealthRoutes(app);
   registerAgentRoutes(app, opts, logger);
   registerSessionRoutes(app, opts);
-  registerUsageRoutes(app, opts, usageTracker);
-  registerWebSocketRoute(app, opts, usageTracker, logger, rateLimiter);
+  registerUsageRoutes(app, opts, usageTracker, costTracker);
+  registerAdminRoutes(app, opts, costTracker, logger);
+  registerWebSocketRoute(app, opts, usageTracker, logger, rateLimiter, costTracker);
 
   // Periodic sweep of stale message buffers
   const sweepTimer = setInterval(sweepStaleBuffers, SWEEP_INTERVAL_MS);
@@ -872,6 +947,8 @@ export async function startServer(opts: ServeOptions): Promise<void> {
   const shutdown = async () => {
     logger.info("server", "server.shutdown", "Serve mode shutting down");
     clearInterval(sweepTimer);
+    costTracker.stopPersistence();
+    await costTracker.persist();
     await app.close();
     process.exit(0);
   };

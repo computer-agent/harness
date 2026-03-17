@@ -150,6 +150,25 @@ export interface WsReplay {
   messages: WsServerMessage[];
 }
 
+// Budget messages
+export interface WsBudgetWarning {
+  type: "budget_warning";
+  warnings: Array<{
+    budget: "session" | "daily" | "monthly";
+    limit: number;
+    used: number;
+    percentage: number;
+  }>;
+}
+
+export interface WsBudgetExceeded {
+  type: "budget_exceeded";
+  reason: "session" | "daily" | "monthly";
+  limit: number;
+  used: number;
+  resetsAt?: string;
+}
+
 export type WsServerMessage =
   | WsConnected
   | WsSubscribed
@@ -167,4 +186,6 @@ export type WsServerMessage =
   | WsStatus
   | WsResult
   | WsToolApprovalRequest
-  | WsReplay;
+  | WsReplay
+  | WsBudgetWarning
+  | WsBudgetExceeded;
