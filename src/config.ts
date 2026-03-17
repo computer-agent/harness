@@ -31,6 +31,12 @@ export interface HarnessConfig {
       authFailuresPerMinute?: number;
       wsIdleTimeoutMs?: number;
     };
+    privacy?: {
+      sessionRetentionDays?: number;
+      workspaceRetentionDays?: number;
+      usageRetentionDays?: number;
+      policyVersion?: string;
+    };
   };
 }
 
@@ -53,6 +59,12 @@ const DEFAULTS: HarnessConfig = {
   serve: {
     logging: {
       level: "info",
+    },
+    privacy: {
+      sessionRetentionDays: 90,
+      workspaceRetentionDays: 365,
+      usageRetentionDays: 365,
+      policyVersion: "2026-03-01",
     },
   },
 };

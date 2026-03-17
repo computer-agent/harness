@@ -26,7 +26,12 @@ export interface WsToolApprovalResponse {
   approved: boolean;
 }
 
-export type WsClientMessage = WsSubscribe | WsMessage | WsInterrupt | WsPing | WsToolApprovalResponse;
+export interface WsConsentGranted {
+  type: "consent_granted";
+  policyVersion: string;
+}
+
+export type WsClientMessage = WsSubscribe | WsMessage | WsInterrupt | WsPing | WsToolApprovalResponse | WsConsentGranted;
 
 // ─── Server → Client ───
 
@@ -169,6 +174,11 @@ export interface WsBudgetExceeded {
   resetsAt?: string;
 }
 
+export interface WsConsentRequired {
+  type: "consent_required";
+  policyVersion: string;
+}
+
 export interface WsRosterUpdated {
   type: "roster_updated";
   agents: Array<{
@@ -201,4 +211,5 @@ export type WsServerMessage =
   | WsReplay
   | WsBudgetWarning
   | WsBudgetExceeded
+  | WsConsentRequired
   | WsRosterUpdated;

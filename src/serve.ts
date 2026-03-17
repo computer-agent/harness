@@ -33,6 +33,16 @@ import {
 } from "./sessions.js";
 import type { WsAssistantMessage, WsClientMessage, WsToken, WsToolUseStart } from "./types/ws.js";
 import { Logger } from "./logger.js";
+import {
+  checkConsent,
+  recordConsent,
+  exportUserData,
+  deleteUserData,
+  runRetentionCleanup,
+  privacyDisclosure,
+  DEFAULT_PRIVACY_CONFIG,
+  type PrivacyConfig,
+} from "./privacy.js";
 import { RateLimiter } from "./rate-limit.js";
 import { REMOTE_SANDBOX_DEFAULTS, type RemoteSandboxPolicy } from "./sandbox.js";
 import { UsageTracker } from "./usage.js";
@@ -346,12 +356,88 @@ function registerAdminRoutes(app: FastifyInstance, opts: ServeOptions, costTrack
   });
 }
 
+function registerPrivacyRoutes(
+  app: FastifyInstance,
+  opts: ServeOptions,
+  logger: Logger,
+) {
+  // Privacy disclosure — no auth required
+  app.get("/api/privacy", async () => {
+    const privacyConfig = opts.config.serve?.privacy ?? DEFAULT_PRIVACY_CONFIG;
+    return privacyDisclosure(privacyConfig.policyVersion ?? DEFAULT_PRIVACY_CONFIG.policyVersion);
+  });
+
+  // Data export — self or admin
+  app.get("/api/users/:userId/data", async (request, reply) => {
+    const user = authenticateRequest(request as any, opts.access);
+    if (!user) return reply.code(401).send({ error: "Invalid or missing token" });
+
+    const { userId } = request.params as { userId: string };
+
+    // Self or admin access
+    if (user.name !== userId && user.agents !== "*") {
+      return reply.code(403).send({ error: "Access denied" });
+    }
+
+    try {
+      const zipBuffer = await exportUserData(userId);
+      if (zipBuffer.length === 0) {
+        return reply.code(404).send({ error: "No data found for user" });
+      }
+
+      logger.info("server", "privacy.export", `Data exported for user ${userId}`, {
+        details: { userId, requestedBy: user.name },
+      });
+
+      return reply
+        .type("application/zip")
+        .header("Content-Disposition", `attachment; filename="export-${userId}.zip"`)
+        .send(zipBuffer);
+    } catch (err) {
+      logger.error("server", "privacy.export_failed", `Data export failed: ${err}`);
+      return reply.code(500).send({ error: "Export failed" });
+    }
+  });
+
+  // Data deletion — admin only
+  app.delete("/api/users/:userId/data", async (request, reply) => {
+    const user = authenticateRequest(request as any, opts.access);
+    if (!user) return reply.code(401).send({ error: "Invalid or missing token" });
+    if (user.agents !== "*") return reply.code(403).send({ error: "Admin access required" });
+
+    const { userId } = request.params as { userId: string };
+
+    try {
+      const report = await deleteUserData(userId);
+
+      // Check if anything was actually deleted
+      const { deleted } = report;
+      const totalDeleted = deleted.sessions + deleted.memoryFiles + deleted.workspaceFiles +
+        (deleted.usageFile ? 1 : 0) + (deleted.consentFile ? 1 : 0);
+
+      if (totalDeleted === 0) {
+        return reply.code(404).send({ error: "No data found for user" });
+      }
+
+      logger.info("server", "privacy.deletion", `Data deleted for user ${userId}`, {
+        details: { userId, requestedBy: user.name, report: report.deleted },
+      });
+
+      return report;
+    } catch (err) {
+      logger.error("server", "privacy.deletion_failed", `Data deletion failed: ${err}`);
+      return reply.code(500).send({ error: "Deletion failed" });
+    }
+  });
+}
+
 // ─── WebSocket handler ───
 
 async function handleSubscribe(
   ws: WebSocket,
   msg: { agentId: string; sessionId?: string; lastMessageId?: number },
   user: AccessUser,
+  config: HarnessConfig,
 ): Promise<ActiveConversation | null> {
   const allAgents = await listAgents();
   const agent = allAgents.find((a) => a.id === msg.agentId);
@@ -361,6 +447,18 @@ async function handleSubscribe(
   }
   if (!userCanAccessAgent(agent, user)) {
     ws.send(JSON.stringify({ type: "error", code: "access_denied", message: "Access denied" }));
+    return null;
+  }
+
+  // Check consent before creating conversation
+  const privacyConfig = config.serve?.privacy ?? DEFAULT_PRIVACY_CONFIG;
+  const policyVersion = privacyConfig.policyVersion ?? DEFAULT_PRIVACY_CONFIG.policyVersion;
+  const hasConsent = await checkConsent(user.name, policyVersion);
+  if (!hasConsent) {
+    ws.send(JSON.stringify({
+      type: "consent_required",
+      policyVersion,
+    }));
     return null;
   }
 
@@ -843,7 +941,7 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
           switch (msg.type) {
             case "subscribe": {
               const prev = activeConversation;
-              activeConversation = await handleSubscribe(ws, msg, user);
+              activeConversation = await handleSubscribe(ws, msg, user, opts.config);
               if (activeConversation && !prev) {
                 activeSessionCount++;
               }
@@ -903,6 +1001,11 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
                 }
               }
               break;
+            case "consent_granted": {
+              await recordConsent(user.name, msg.policyVersion);
+              ws.send(JSON.stringify({ type: "status", status: "idle" }));
+              break;
+            }
             case "interrupt":
               if (activeConversation?.activeQuery) {
                 activeConversation.activeQuery.interrupt();
@@ -1016,6 +1119,7 @@ export async function startServer(opts: ServeOptions): Promise<void> {
   registerSessionRoutes(app, opts);
   registerUsageRoutes(app, opts, usageTracker, costTracker);
   registerAdminRoutes(app, opts, costTracker, logger);
+  registerPrivacyRoutes(app, opts, logger);
   registerWebSocketRoute(app, opts, usageTracker, logger, rateLimiter, costTracker);
 
   // ─── File watcher for hot reload ───
@@ -1105,11 +1209,26 @@ export async function startServer(opts: ServeOptions): Promise<void> {
   // Periodic sweep of stale message buffers
   const sweepTimer = setInterval(sweepStaleBuffers, SWEEP_INTERVAL_MS);
 
+  // Retention cleanup — run once at startup, then daily
+  const privacyConfig: PrivacyConfig = {
+    ...DEFAULT_PRIVACY_CONFIG,
+    ...opts.config.serve?.privacy,
+  };
+  runRetentionCleanup(privacyConfig, logger).catch(err => {
+    logger.error("server", "retention.cleanup_failed", `Initial retention cleanup failed: ${err}`);
+  });
+  const retentionTimer = setInterval(() => {
+    runRetentionCleanup(privacyConfig, logger).catch(err => {
+      logger.error("server", "retention.cleanup_failed", `Retention cleanup failed: ${err}`);
+    });
+  }, 24 * 60 * 60 * 1000); // daily
+
   // Clean shutdown
   const shutdown = async () => {
     healthMonitor.setShuttingDown();
     logger.info("server", "server.shutdown", "Serve mode shutting down");
     clearInterval(sweepTimer);
+    clearInterval(retentionTimer);
     watcher.stop();
     costTracker.stopPersistence();
     await costTracker.persist();
