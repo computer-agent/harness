@@ -1223,16 +1223,63 @@ export async function startServer(opts: ServeOptions): Promise<void> {
     });
   }, 24 * 60 * 60 * 1000); // daily
 
-  // Clean shutdown
+  // Graceful shutdown with connection draining
+  const SHUTDOWN_TIMEOUT_MS = 30_000;
+
   const shutdown = async () => {
     healthMonitor.setShuttingDown();
-    logger.info("server", "server.shutdown", "Serve mode shutting down");
+    logger.info("server", "server.shutdown", "Graceful shutdown initiated");
+
+    // Stop accepting new work and watching files
+    watcher.stop();
     clearInterval(sweepTimer);
     clearInterval(retentionTimer);
-    watcher.stop();
+
+    // Wait for active queries to complete (max 30s)
+    const drainStart = Date.now();
+    const checkDrained = (): boolean => activeSessionCount === 0;
+
+    if (!checkDrained()) {
+      logger.info(
+        "server",
+        "server.draining",
+        `Waiting for ${activeSessionCount} active sessions to complete (max ${SHUTDOWN_TIMEOUT_MS / 1000}s)`,
+      );
+
+      await new Promise<void>((resolve) => {
+        const interval = setInterval(() => {
+          if (checkDrained() || Date.now() - drainStart > SHUTDOWN_TIMEOUT_MS) {
+            clearInterval(interval);
+            resolve();
+          }
+        }, 500);
+      });
+
+      if (!checkDrained()) {
+        logger.warn(
+          "server",
+          "server.drain_timeout",
+          `Shutdown timeout: ${activeSessionCount} sessions still active, forcing close`,
+        );
+      }
+    }
+
+    // Close all remaining WebSocket connections
+    for (const [ws] of connectedClients) {
+      try {
+        ws.close(1001, "Server shutting down");
+      } catch {
+        // Already closed
+      }
+    }
+
+    // Persist state
     costTracker.stopPersistence();
     await costTracker.persist();
+
+    // Close the HTTP server
     await app.close();
+    logger.info("server", "server.shutdown", "Shutdown complete");
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
