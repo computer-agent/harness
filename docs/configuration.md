@@ -36,15 +36,11 @@ tools:
     enabled: true
   a2a:
     enabled: true
-
-a2a:
-  enabled: true
-  port: 4000                 # Default port for --serve mode
-  agents: {}                 # Registered remote A2A agents
-  # Example:
-  #   data-pipeline:
-  #     url: http://data-agent.internal:4000
-  #     description: "LangGraph data pipeline agent"
+    agents: {}               # Registered remote A2A agents
+    # Example:
+    #   data-pipeline:
+    #     url: http://data-agent.internal:4000
+    #     description: "LangGraph data pipeline agent"
 ```
 
 Config is loaded at startup, deep-merged with defaults. Tools are only created if enabled. Model is read from config and passed to the SDK.

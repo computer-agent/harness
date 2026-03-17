@@ -53,7 +53,7 @@ The A2A tool lets agents discover and call remote A2A-compatible agents (LangGra
 | `a2a_discover` | Fetch an Agent Card from a URL or registered name |
 | `a2a_call` | Send a message to a remote A2A agent and get the response |
 
-Agents can be referenced by URL or by name (if registered in `config.yaml` under `a2a.agents`). Agent Cards are cached in-memory for the session.
+Agents can be referenced by URL or by name (if registered in `config.yaml` under `tools.a2a.agents`). Agent Cards are cached in-memory for the session.
 
 ## MCP Tool Search
 
