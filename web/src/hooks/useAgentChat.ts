@@ -139,6 +139,10 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
         store.appendToken(msg.text, msg.id);
         break;
 
+      case "thinking_token":
+        store.appendThinkingToken(msg.text);
+        break;
+
       case "tool_use_start":
         store.addToolCall({
           id: msg.toolId,
@@ -171,6 +175,18 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
 
       case "error":
         handleWsError(msg.code, msg.message);
+        break;
+
+      case "subagent_started":
+        store.addSubagentTask(msg.taskId, msg.description);
+        break;
+
+      case "subagent_progress":
+        store.updateSubagentProgress(msg.taskId, msg.toolUses, msg.durationMs, msg.totalTokens);
+        break;
+
+      case "subagent_done":
+        store.completeSubagentTask(msg.taskId, msg.status, msg.summary, msg.totalTokens);
         break;
 
       case "replay":
@@ -284,6 +300,7 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
     agentStatus: store.agentStatus,
     connectionState,
     rateLimitedUntil: store.rateLimitedUntil,
+    subagentTasks: store.subagentTasks,
     sendMessage,
     interrupt,
     retryLastMessage,

@@ -1,12 +1,24 @@
-import { AlertTriangle, Check, Copy, RotateCcw } from "lucide-react";
-import { Component, type ComponentProps, type ErrorInfo, memo, type ReactNode, useCallback, useState } from "react";
+import { AlertTriangle, Check, ChevronDown, Copy, RotateCcw } from "lucide-react";
+import {
+  Component,
+  type ComponentProps,
+  type ErrorInfo,
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import Markdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useChatStore } from "@/stores/chat";
 import type { ChatMessage } from "@/types";
+import { SubagentIndicator } from "./SubagentIndicator";
 import { ToolCallBlock } from "./ToolCallBlock";
 
 // FIX-07: Error boundary to prevent markdown parse failures from crashing the chat UI
@@ -32,6 +44,37 @@ class MarkdownErrorBoundary extends Component<{ children: ReactNode; fallbackCon
   }
 }
 
+function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
+  const [isOpen, setIsOpen] = useState(true);
+
+  // Auto-collapse when streaming ends
+  const prevStreamingRef = useRef(true);
+  useEffect(() => {
+    if (prevStreamingRef.current && !isStreaming) {
+      setIsOpen(false);
+    }
+    prevStreamingRef.current = !!isStreaming;
+  }, [isStreaming]);
+
+  return (
+    <div className="mb-2">
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-400 transition-colors"
+      >
+        <ChevronDown className={cn("h-3 w-3 transition-transform", !isOpen && "-rotate-90")} />
+        <span className="italic">Thinking...</span>
+      </button>
+      {isOpen && (
+        <pre className="mt-1 max-h-60 overflow-y-auto whitespace-pre-wrap break-words text-xs text-zinc-500 italic">
+          {content}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 // FIX-16: Memoize to avoid re-rendering every bubble when a new message arrives.
 // ToolCallBlock is intentionally NOT memoized — it has dynamic internal state.
 export const MessageBubble = memo(function MessageBubble({
@@ -42,6 +85,7 @@ export const MessageBubble = memo(function MessageBubble({
   onRetry?: () => void;
 }) {
   const { t } = useTranslation();
+  const subagentTasks = useChatStore((s) => s.subagentTasks);
 
   if (message.role === "user") {
     return (
@@ -78,10 +122,24 @@ export const MessageBubble = memo(function MessageBubble({
   return (
     <div className="flex gap-2 px-4 py-1" data-role="assistant">
       <div className="max-w-[80%] space-y-0.5 rounded-2xl rounded-bl-sm bg-secondary px-4 py-2.5 text-sm sm:max-w-[90%]">
+        {/* Thinking tokens */}
+        {message.thinkingContent && (
+          <ThinkingBlock content={message.thinkingContent} isStreaming={message.isStreaming} />
+        )}
+
         {/* Render tool calls inline */}
         {message.toolCalls?.map((tc) => (
           <ToolCallBlock key={tc.id} toolCall={tc} />
         ))}
+
+        {/* Render active subagent tasks */}
+        {subagentTasks.length > 0 && (
+          <div className="space-y-1">
+            {subagentTasks.map((task) => (
+              <SubagentIndicator key={task.taskId} task={task} />
+            ))}
+          </div>
+        )}
 
         {/* Markdown content */}
         {message.content && (

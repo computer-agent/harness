@@ -25,6 +25,17 @@ export interface ChatMessage {
   isError?: boolean;
   errorCode?: string;
   toolCalls?: ToolCall[];
+  thinkingContent?: string;
+}
+
+export interface SubagentTask {
+  taskId: string;
+  description: string;
+  status: "running" | "completed" | "failed" | "stopped";
+  toolUses: number;
+  durationMs: number;
+  totalTokens: number;
+  summary?: string;
 }
 
 export interface ToolCall {

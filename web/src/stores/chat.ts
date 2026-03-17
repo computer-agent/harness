@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ChatMessage, ToolCall } from "@/types";
+import type { ChatMessage, SubagentTask, ToolCall } from "@/types";
 
 interface ChatStore {
   // Current conversation
@@ -11,6 +11,7 @@ interface ChatStore {
   isStreaming: boolean;
   rateLimitedUntil: number | null;
   agentStatus: "idle" | "thinking" | "tool_use" | "responding" | "interrupted";
+  subagentTasks: SubagentTask[];
 
   // Per-session message cache (survives navigation between conversations)
   cache: Record<string, { messages: ChatMessage[]; lastMessageId: number }>;
@@ -19,6 +20,7 @@ interface ChatStore {
   addUserMessage: (content: string) => void;
   startAssistantMessage: () => void;
   appendToken: (text: string, id: number) => void;
+  appendThinkingToken: (text: string) => void;
   finalizeAssistantMessage: (content: string, id: number) => void;
   addToolCall: (tool: ToolCall) => void;
   updateToolInput: (toolId: string, partialJson: string) => void;
@@ -33,6 +35,10 @@ interface ChatStore {
   loadHistory: (messages: ChatMessage[]) => void;
   queuePendingMessage: (content: string) => void;
   flushPendingMessages: () => string[];
+  addSubagentTask: (taskId: string, description: string) => void;
+  updateSubagentProgress: (taskId: string, toolUses: number, durationMs: number, totalTokens: number) => void;
+  completeSubagentTask: (taskId: string, status: SubagentTask["status"], summary: string, totalTokens: number) => void;
+  clearSubagentTasks: () => void;
 }
 
 function conversationKey(agentId: string, sessionId: string | null): string {
@@ -50,6 +56,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   isStreaming: false,
   rateLimitedUntil: null,
   agentStatus: "idle",
+  subagentTasks: [],
   cache: {},
 
   // Save current messages to cache, then load (or init) the target conversation
@@ -71,6 +78,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       lastMessageId: cached?.lastMessageId ?? 0,
       isStreaming: false,
       agentStatus: "idle",
+      subagentTasks: [],
     });
   },
 
@@ -117,6 +125,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         msgs[msgs.length - 1] = { ...last, content: last.content + text, isStreaming: true };
       }
       return { messages: msgs, isStreaming: true, lastMessageId: Math.max(s.lastMessageId, id) };
+    });
+  },
+
+  appendThinkingToken: (text) => {
+    set((s) => {
+      const msgs = [...s.messages];
+      const last = msgs[msgs.length - 1];
+      if (last?.role === "assistant") {
+        msgs[msgs.length - 1] = {
+          ...last,
+          thinkingContent: (last.thinkingContent ?? "") + text,
+        };
+      }
+      return { messages: msgs };
     });
   },
 
@@ -214,4 +236,36 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set({ pendingMessages: [] });
     return pending;
   },
+
+  addSubagentTask: (taskId, description) => {
+    set((s) => ({
+      subagentTasks: [
+        ...s.subagentTasks,
+        {
+          taskId,
+          description,
+          status: "running",
+          toolUses: 0,
+          durationMs: 0,
+          totalTokens: 0,
+        },
+      ],
+    }));
+  },
+
+  updateSubagentProgress: (taskId, toolUses, durationMs, totalTokens) => {
+    set((s) => ({
+      subagentTasks: s.subagentTasks.map((t) =>
+        t.taskId === taskId ? { ...t, toolUses, durationMs, totalTokens } : t,
+      ),
+    }));
+  },
+
+  completeSubagentTask: (taskId, status, summary, totalTokens) => {
+    set((s) => ({
+      subagentTasks: s.subagentTasks.map((t) => (t.taskId === taskId ? { ...t, status, summary, totalTokens } : t)),
+    }));
+  },
+
+  clearSubagentTasks: () => set({ subagentTasks: [] }),
 }));

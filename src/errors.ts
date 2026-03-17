@@ -5,7 +5,7 @@
  */
 
 export interface ClassifiedError {
-  category: "auth" | "rate_limit" | "overloaded" | "network" | "invalid_request" | "server" | "unknown";
+  category: "auth_failed" | "rate_limited" | "overloaded" | "network" | "invalid_request" | "model_error" | "unknown";
   message: string;
   suggestion: string;
 }
@@ -19,7 +19,7 @@ const patterns: Array<{
       status === 401 ||
       /unauthorized|authentication|invalid.*api.key|invalid.*token|expired.*token|expired.*credential/i.test(msg),
     classify: () => ({
-      category: "auth",
+      category: "auth_failed",
       suggestion: "Run 'claude login' to refresh credentials, or check your ANTHROPIC_API_KEY.",
     }),
   },
@@ -27,7 +27,7 @@ const patterns: Array<{
     test: (msg, status) =>
       status === 403 || /forbidden|permission denied|access denied|insufficient.*scope/i.test(msg),
     classify: () => ({
-      category: "auth",
+      category: "auth_failed",
       suggestion:
         "Your credentials may lack the required scopes. Run 'claude login' to re-authenticate.",
     }),
@@ -35,7 +35,7 @@ const patterns: Array<{
   {
     test: (msg, status) => status === 429 || /rate.limit|too many requests|throttl/i.test(msg),
     classify: () => ({
-      category: "rate_limit",
+      category: "rate_limited",
       suggestion: "Wait a moment and try again. If persistent, check your plan's rate limits.",
     }),
   },
@@ -51,7 +51,7 @@ const patterns: Array<{
       (status !== undefined && status >= 500 && status < 600) ||
       /internal server error|bad gateway|service unavailable/i.test(msg),
     classify: () => ({
-      category: "server",
+      category: "model_error",
       suggestion: "Upstream API error. Check https://status.anthropic.com and retry shortly.",
     }),
   },

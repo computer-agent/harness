@@ -103,6 +103,11 @@ export interface WsSubagentDoneMsg {
   totalTokens: number;
 }
 
+export interface WsThinkingTokenMsg {
+  type: "thinking_token";
+  text: string;
+}
+
 export interface WsReplayMsg {
   type: "replay";
   messages: WsServerMsg[];
@@ -121,6 +126,7 @@ export type WsServerMsg =
   | WsSubagentStartedMsg
   | WsSubagentProgressMsg
   | WsSubagentDoneMsg
+  | WsThinkingTokenMsg
   | WsReplayMsg;
 
 // Tool summary generation

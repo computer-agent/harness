@@ -655,9 +655,13 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
               }
               await handleMessage(ws, msg, activeConversation, opts.config, usageTracker);
               break;
+            case "ping":
+              ws.send(JSON.stringify({ type: "pong" }));
+              break;
             case "interrupt":
               if (activeConversation?.activeQuery) {
                 activeConversation.activeQuery.interrupt();
+                ws.send(JSON.stringify({ type: "status", status: "interrupted" }));
               }
               break;
           }

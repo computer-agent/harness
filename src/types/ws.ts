@@ -16,7 +16,11 @@ export interface WsInterrupt {
   type: "interrupt";
 }
 
-export type WsClientMessage = WsSubscribe | WsMessage | WsInterrupt;
+export interface WsPing {
+  type: "ping";
+}
+
+export type WsClientMessage = WsSubscribe | WsMessage | WsInterrupt | WsPing;
 
 // ─── Server → Client ───
 
