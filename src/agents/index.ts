@@ -4,10 +4,9 @@ import { createResearcher } from "./researcher.js";
 import { createWriter } from "./writer.js";
 
 export function createAgentRegistry(agentName: string): Record<string, AgentDefinition> {
-  const toolPrefix = `${agentName}-`;
   return {
-    researcher: createResearcher(toolPrefix),
-    "deep-thinker": createDeepThinker(toolPrefix),
-    writer: createWriter(toolPrefix),
+    researcher: createResearcher(agentName),
+    "deep-thinker": createDeepThinker(agentName),
+    writer: createWriter(agentName),
   };
 }

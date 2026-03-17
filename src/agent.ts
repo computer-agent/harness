@@ -150,10 +150,10 @@ function buildCanUseTool(ctx: AgentContext, config: HarnessConfig): CanUseTool |
     config.hooks.verifyBeforeComplete;
   if (!needsHook) return undefined;
 
-  // B2: Loop detection state
+  // B2: Loop detection — per-file edit counts
   const editCounts = new Map<string, number>();
-  // B1: Verification tracking state
-  let hasUnverifiedWrites = false;
+  // B1: Verification tracking — set of files written but not yet read back
+  const unverifiedWrites = new Set<string>();
 
   return async (toolName, input) => {
     // Tool use logging
@@ -170,37 +170,41 @@ function buildCanUseTool(ctx: AgentContext, config: HarnessConfig): CanUseTool |
       toolName.endsWith("__grep_files") ||
       toolName.endsWith("__shell_exec");
 
+    // Extract file path from tool input (used by both B1 and B2)
+    const inp = input as Record<string, unknown>;
+    const filePath = (inp.path ?? inp.file_path ?? "") as string;
+
     let message: string | undefined;
 
-    // B2: Loop detection
-    if (config.hooks.loopDetection && isWrite) {
-      const inp = input as Record<string, unknown>;
-      const filePath = (inp.path ?? inp.file_path ?? "") as string;
-      if (filePath) {
-        const count = (editCounts.get(filePath) || 0) + 1;
-        editCounts.set(filePath, count);
-        if (count >= config.hooks.loopDetectionThreshold) {
-          message = `You've edited ${filePath} ${count} times. Consider stepping back: is your approach correct, or should you try a fundamentally different solution?`;
-        }
+    // B2: Loop detection — warn after repeated edits to the same file
+    if (config.hooks.loopDetection && isWrite && filePath) {
+      const count = (editCounts.get(filePath) || 0) + 1;
+      editCounts.set(filePath, count);
+      if (count >= config.hooks.loopDetectionThreshold) {
+        message = `You've edited ${filePath} ${count} times. Consider stepping back: is your approach correct, or should you try a fundamentally different solution?`;
       }
     }
 
-    // B1: Verification tracking
+    // B1: Verification tracking — per-file unverified write tracking
     if (config.hooks.verifyBeforeComplete) {
-      if (isWrite) {
-        hasUnverifiedWrites = true;
-      } else if (isVerify) {
-        hasUnverifiedWrites = false;
-      } else if (hasUnverifiedWrites) {
+      if (isWrite && filePath) {
+        unverifiedWrites.add(filePath);
+      } else if (isVerify && filePath) {
+        // Reading/grepping a specific file counts as verifying it
+        unverifiedWrites.delete(filePath);
+      } else if (isVerify && !filePath) {
+        // shell_exec or grep without a specific path — clear all (broad verification)
+        unverifiedWrites.clear();
+      } else if (unverifiedWrites.size > 0) {
         message =
           message ??
           "You modified files but haven't verified the changes. Please read back modified files to confirm correctness before continuing.";
       }
     }
 
-    // Reset loop counter when a verification tool runs
-    if (isVerify && config.hooks.loopDetection) {
-      editCounts.clear();
+    // Reset loop counter only for the specific file being verified
+    if (isVerify && config.hooks.loopDetection && filePath) {
+      editCounts.delete(filePath);
     }
 
     return { behavior: "allow" as const, ...(message ? { message } : {}) };

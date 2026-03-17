@@ -185,7 +185,7 @@ if (getFlag("card")) {
   const { buildAgentCard } = await import("./a2a/agent-card.js");
   const { loadIdentity } = await import("./prompt.js");
   const identity = await loadIdentity(agentContext.identityPath);
-  const port = Number(getFlagValue("port")) || config.a2a.port;
+  const port = Number(getFlagValue("port")) || 4000;
   const card = buildAgentCard(agentContext.name, identity, { port });
   console.log(JSON.stringify(card, null, 2));
   process.exit(0);
@@ -194,7 +194,7 @@ if (getFlag("card")) {
 // --- Flag: --serve (A2A server mode) ---
 
 if (getFlag("serve")) {
-  const port = Number(getFlagValue("port")) || config.a2a.port;
+  const port = Number(getFlagValue("port")) || 4000;
   const { startA2AServer } = await import("./a2a/server.js");
   await startA2AServer(agentContext, config, port);
   // Server runs indefinitely — don't proceed to TUI

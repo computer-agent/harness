@@ -3,6 +3,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
 
+export interface A2AAgentEntry {
+  url: string;
+  description: string;
+}
+
 export interface HarnessConfig {
   model: string;
   defaultAgent: string;
@@ -15,7 +20,7 @@ export interface HarnessConfig {
     introspection: { enabled: boolean };
     models: { enabled: boolean };
     scratchpad: { enabled: boolean };
-    a2a: { enabled: boolean };
+    a2a: { enabled: boolean; agents: Record<string, A2AAgentEntry> };
   };
   hooks: {
     logToolUse: boolean;
@@ -26,11 +31,6 @@ export interface HarnessConfig {
     compactOutputThreshold: number;
   };
   effort: "low" | "medium" | "high" | "max";
-  a2a: {
-    enabled: boolean;
-    port: number;
-    agents: Record<string, { url: string; description: string }>;
-  };
 }
 
 const DEFAULTS: HarnessConfig = {
@@ -45,7 +45,7 @@ const DEFAULTS: HarnessConfig = {
     introspection: { enabled: true },
     models: { enabled: true },
     scratchpad: { enabled: true },
-    a2a: { enabled: true },
+    a2a: { enabled: true, agents: {} },
   },
   hooks: {
     logToolUse: false,
@@ -56,11 +56,6 @@ const DEFAULTS: HarnessConfig = {
     compactOutputThreshold: 50,
   },
   effort: "max",
-  a2a: {
-    enabled: true,
-    port: 4000,
-    agents: {},
-  },
 };
 
 export function getHomeDir(): string {
@@ -74,7 +69,8 @@ export function getConfigPath(): string {
 function deepMerge(target: any, source: any): any {
   const result = { ...target };
   for (const key of Object.keys(source)) {
-    if (source[key] && typeof source[key] === "object" && !Array.isArray(source[key])) {
+    if (source[key] === null || source[key] === undefined) continue;
+    if (typeof source[key] === "object" && !Array.isArray(source[key])) {
       result[key] = deepMerge(target[key] ?? {}, source[key]);
     } else {
       result[key] = source[key];
@@ -125,6 +121,15 @@ tools:
     enabled: true
   models:
     enabled: true
+  scratchpad:
+    enabled: true
+  a2a:
+    enabled: true
+    agents: {}
+    # Registered remote A2A agents (name → url + description):
+    #   data-pipeline:
+    #     url: http://data-agent.internal:4000
+    #     description: "LangGraph data pipeline agent"
 
 # Hooks — lifecycle callbacks for the agent SDK
 hooks:
@@ -138,14 +143,4 @@ hooks:
   # Truncate long successful command output, preserve full failure output
   compactSuccessOutput: true
   compactOutputThreshold: 50
-
-# A2A protocol configuration
-a2a:
-  enabled: true
-  port: 4000         # default port for --serve mode
-  agents: {}         # registered remote A2A agents
-  # Example:
-  #   data-pipeline:
-  #     url: http://data-agent.internal:4000
-  #     description: "LangGraph data pipeline agent"
 `;

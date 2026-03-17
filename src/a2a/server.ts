@@ -36,7 +36,7 @@ export async function startA2AServer(
   );
 
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: "100kb" }));
 
   // Agent Card endpoint
   app.get(

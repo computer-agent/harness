@@ -1,6 +1,9 @@
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
+import { mcpTool } from "../tools/index.js";
 
-export function createWriter(toolPrefix: string): AgentDefinition {
+export function createWriter(agentName: string): AgentDefinition {
+  const t = (server: string, tool: string) => mcpTool(agentName, server, tool);
+
   return {
     description:
       "Writing agent for drafting documents, strategy memos, blog posts, and long-form material. Use when you need to produce a draft longer than a few paragraphs. Keeps your main context clean by doing drafts and revisions in a separate context.",
@@ -34,19 +37,19 @@ Return results in a condensed, scannable format:
 - If the parent needs more detail, it can follow your citations
 - Keep total response under 4000 words unless the task explicitly requires more`,
     tools: [
-      `mcp__${toolPrefix}workspace__read_file`,
-      `mcp__${toolPrefix}workspace__write_file`,
-      `mcp__${toolPrefix}workspace__edit_file`,
-      `mcp__${toolPrefix}workspace__find_files`,
-      `mcp__${toolPrefix}workspace__grep_files`,
-      `mcp__${toolPrefix}workspace__list_files`,
-      `mcp__${toolPrefix}memory__memory_read`,
-      `mcp__${toolPrefix}memory__memory_list`,
-      `mcp__${toolPrefix}web__web_search`,
-      `mcp__${toolPrefix}web__web_fetch`,
-      `mcp__${toolPrefix}scratchpad__scratchpad_read`,
-      `mcp__${toolPrefix}scratchpad__scratchpad_write`,
+      t("workspace", "read_file"),
+      t("workspace", "write_file"),
+      t("workspace", "edit_file"),
+      t("workspace", "find_files"),
+      t("workspace", "grep_files"),
+      t("workspace", "list_files"),
+      t("memory", "memory_read"),
+      t("memory", "memory_list"),
+      t("web", "web_search"),
+      t("web", "web_fetch"),
+      t("scratchpad", "scratchpad_read"),
+      t("scratchpad", "scratchpad_write"),
     ],
-    disallowedTools: [`mcp__${toolPrefix}shell__shell_exec`],
+    disallowedTools: [t("shell", "shell_exec")],
   };
 }

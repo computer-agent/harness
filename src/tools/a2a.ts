@@ -3,23 +3,31 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { AgentCard } from "@a2a-js/sdk";
 import { AgentCardResolver, ClientFactory } from "@a2a-js/sdk/client";
-import type { HarnessConfig } from "../config.js";
+import type { A2AAgentEntry } from "../config.js";
 
-export function createA2ATools(config: HarnessConfig) {
-  // In-memory agent card cache for the session
+const MAX_CARD_CACHE = 50;
+
+export function createA2ATools(agents: Record<string, A2AAgentEntry>) {
   const cardCache = new Map<string, AgentCard>();
   const clientFactory = new ClientFactory();
-  const registeredAgents = config.a2a.agents;
+
+  function cacheCard(url: string, card: AgentCard) {
+    if (cardCache.size >= MAX_CARD_CACHE) {
+      const oldest = cardCache.keys().next().value!;
+      cardCache.delete(oldest);
+    }
+    cardCache.set(url, card);
+  }
 
   // Resolve name or URL to a URL
   function resolveUrl(nameOrUrl: string): string {
     if (nameOrUrl.startsWith("http://") || nameOrUrl.startsWith("https://")) {
       return nameOrUrl;
     }
-    const entry = registeredAgents[nameOrUrl];
+    const entry = agents[nameOrUrl];
     if (!entry) {
       throw new Error(
-        `Unknown agent "${nameOrUrl}". Use a full URL or register it in config.yaml under a2a.agents.`,
+        `Unknown agent "${nameOrUrl}". Use a full URL or register it in config.yaml under tools.a2a.agents.`,
       );
     }
     return entry.url;
@@ -30,13 +38,13 @@ export function createA2ATools(config: HarnessConfig) {
     "List all registered A2A agents from config. Returns name, URL, and description for each.",
     {},
     async () => {
-      const entries = Object.entries(registeredAgents);
+      const entries = Object.entries(agents);
       if (entries.length === 0) {
         return {
           content: [
             {
               type: "text" as const,
-              text: "No A2A agents registered. Add them to config.yaml under a2a.agents.",
+              text: "No A2A agents registered. Add them to config.yaml under tools.a2a.agents.",
             },
           ],
         };
@@ -62,7 +70,7 @@ export function createA2ATools(config: HarnessConfig) {
         }
 
         const card = await AgentCardResolver.default.resolve(resolved);
-        cardCache.set(resolved, card);
+        cacheCard(resolved, card);
         return { content: [{ type: "text" as const, text: JSON.stringify(card, null, 2) }] };
       } catch (err) {
         return { content: [{ type: "text" as const, text: `Failed to discover agent at ${url}: ${err}` }] };
@@ -124,7 +132,7 @@ export function createA2ATools(config: HarnessConfig) {
 
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (err) {
-        return { content: [{ type: "text" as const, text: `A2A call to ${url} failed: ${err}` }] };
+        return { content: [{ type: "text" as const, text: `A2A call failed: ${err}` }] };
       }
     },
   );

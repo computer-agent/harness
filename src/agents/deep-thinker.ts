@@ -1,6 +1,9 @@
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
+import { mcpTool } from "../tools/index.js";
 
-export function createDeepThinker(toolPrefix: string): AgentDefinition {
+export function createDeepThinker(agentName: string): AgentDefinition {
+  const t = (server: string, tool: string) => mcpTool(agentName, server, tool);
+
   return {
     description:
       "Deep analysis agent for complex reasoning, strategy evaluation, and multi-factor decisions. Use when you need to think deeply about a problem — evaluate trade-offs, stress-test assumptions, model second-order effects, or work through a hard decision. Runs on Opus with full thinking enabled.",
@@ -39,18 +42,18 @@ Return results in a condensed, scannable format:
 - If the parent needs more detail, it can follow your citations
 - Keep total response under 2000 words unless the task explicitly requires more`,
     tools: [
-      `mcp__${toolPrefix}workspace__read_file`,
-      `mcp__${toolPrefix}workspace__list_files`,
-      `mcp__${toolPrefix}workspace__find_files`,
-      `mcp__${toolPrefix}workspace__grep_files`,
-      `mcp__${toolPrefix}memory__memory_read`,
-      `mcp__${toolPrefix}memory__memory_list`,
-      `mcp__${toolPrefix}scratchpad__scratchpad_read`,
+      t("workspace", "read_file"),
+      t("workspace", "list_files"),
+      t("workspace", "find_files"),
+      t("workspace", "grep_files"),
+      t("memory", "memory_read"),
+      t("memory", "memory_list"),
+      t("scratchpad", "scratchpad_read"),
     ],
     disallowedTools: [
-      `mcp__${toolPrefix}shell__shell_exec`,
-      `mcp__${toolPrefix}workspace__write_file`,
-      `mcp__${toolPrefix}workspace__edit_file`,
+      t("shell", "shell_exec"),
+      t("workspace", "write_file"),
+      t("workspace", "edit_file"),
     ],
   };
 }

@@ -90,7 +90,7 @@ export function buildAgentCard(
     url,
     protocolVersion: "0.3.0",
     capabilities: {
-      streaming: true,
+      streaming: false,
       pushNotifications: false,
     },
     defaultInputModes: ["text/plain"],
