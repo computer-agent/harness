@@ -189,6 +189,14 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
         store.completeSubagentTask(msg.taskId, msg.status, msg.summary, msg.totalTokens);
         break;
 
+      case "tool_approval":
+        store.setToolCallApproval(msg.toolId, msg.question);
+        break;
+
+      case "tool_result":
+        store.setToolResult(msg.toolId, msg.content);
+        break;
+
       case "replay":
         for (const replayed of msg.messages) {
           if (replayed.type === "token") {
@@ -284,6 +292,14 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
     sendJsonMessage({ type: "interrupt" });
   }, [sendJsonMessage]);
 
+  const respondToToolApproval = useCallback(
+    (toolId: string, approved: boolean) => {
+      sendJsonMessage({ type: "tool_approval", toolId, approved });
+      store.updateToolCallStatus(toolId, approved ? "executing" : "error");
+    },
+    [sendJsonMessage, store],
+  );
+
   const connectionState: ConnectionState =
     readyState === ReadyState.OPEN
       ? "connected"
@@ -304,6 +320,7 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
     sendMessage,
     interrupt,
     retryLastMessage,
+    respondToToolApproval,
     sessionId: sessionIdRef.current,
   };
 }

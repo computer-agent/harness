@@ -80,9 +80,11 @@ function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming?
 export const MessageBubble = memo(function MessageBubble({
   message,
   onRetry,
+  onToolApproval,
 }: {
   message: ChatMessage;
   onRetry?: () => void;
+  onToolApproval?: (toolId: string, approved: boolean) => void;
 }) {
   const { t } = useTranslation();
   const subagentTasks = useChatStore((s) => s.subagentTasks);
@@ -129,7 +131,12 @@ export const MessageBubble = memo(function MessageBubble({
 
         {/* Render tool calls inline */}
         {message.toolCalls?.map((tc) => (
-          <ToolCallBlock key={tc.id} toolCall={tc} />
+          <ToolCallBlock
+            key={tc.id}
+            toolCall={tc}
+            onApprove={onToolApproval ? (id) => onToolApproval(id, true) : undefined}
+            onDeny={onToolApproval ? (id) => onToolApproval(id, false) : undefined}
+          />
         ))}
 
         {/* Render active subagent tasks */}

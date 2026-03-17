@@ -35,6 +35,9 @@ interface ChatStore {
   loadHistory: (messages: ChatMessage[]) => void;
   queuePendingMessage: (content: string) => void;
   flushPendingMessages: () => string[];
+  setToolCallApproval: (toolId: string, question: string) => void;
+  updateToolCallStatus: (toolId: string, status: ToolCall["status"]) => void;
+  setToolResult: (toolId: string, output: string) => void;
   addSubagentTask: (taskId: string, description: string) => void;
   updateSubagentProgress: (taskId: string, toolUses: number, durationMs: number, totalTokens: number) => void;
   completeSubagentTask: (taskId: string, status: SubagentTask["status"], summary: string, totalTokens: number) => void;
@@ -235,6 +238,55 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const pending = get().pendingMessages;
     set({ pendingMessages: [] });
     return pending;
+  },
+
+  setToolCallApproval: (toolId, question) => {
+    set((s) => {
+      const msgs = [...s.messages];
+      const last = msgs[msgs.length - 1];
+      if (last?.role === "assistant") {
+        const toolCalls = [...(last.toolCalls ?? [])];
+        const idx = toolCalls.findIndex((tc) => tc.id === toolId);
+        if (idx >= 0) {
+          toolCalls[idx] = { ...toolCalls[idx], status: "needs_approval", question };
+        } else {
+          toolCalls.push({ id: toolId, name: "", inputJson: "", status: "needs_approval", question });
+        }
+        msgs[msgs.length - 1] = { ...last, toolCalls };
+      }
+      return { messages: msgs };
+    });
+  },
+
+  updateToolCallStatus: (toolId, status) => {
+    set((s) => {
+      const msgs = [...s.messages];
+      const last = msgs[msgs.length - 1];
+      if (last?.role === "assistant" && last.toolCalls) {
+        const toolCalls = last.toolCalls.map((tc) => (tc.id === toolId ? { ...tc, status } : tc));
+        msgs[msgs.length - 1] = { ...last, toolCalls };
+      }
+      return { messages: msgs };
+    });
+  },
+
+  setToolResult: (toolId, output) => {
+    set((s) => {
+      const msgs = [...s.messages];
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const msg = msgs[i];
+        if (msg.role === "assistant" && msg.toolCalls) {
+          const idx = msg.toolCalls.findIndex((tc) => tc.id === toolId);
+          if (idx >= 0) {
+            const toolCalls = [...msg.toolCalls];
+            toolCalls[idx] = { ...toolCalls[idx], output, status: "complete" };
+            msgs[i] = { ...msg, toolCalls };
+            break;
+          }
+        }
+      }
+      return { messages: msgs };
+    });
   },
 
   addSubagentTask: (taskId, description) => {

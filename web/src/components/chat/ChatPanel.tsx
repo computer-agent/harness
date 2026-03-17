@@ -17,8 +17,16 @@ interface ChatPanelProps {
 
 export function ChatPanel({ agent, sessionId, onBack }: ChatPanelProps) {
   const { t } = useTranslation();
-  const { messages, isStreaming, connectionState, rateLimitedUntil, sendMessage, interrupt, retryLastMessage } =
-    useAgentChat(agent.id, sessionId);
+  const {
+    messages,
+    isStreaming,
+    connectionState,
+    rateLimitedUntil,
+    sendMessage,
+    interrupt,
+    retryLastMessage,
+    respondToToolApproval,
+  } = useAgentChat(agent.id, sessionId);
 
   const isRateLimited = rateLimitedUntil !== null && Date.now() < rateLimitedUntil;
 
@@ -87,7 +95,12 @@ export function ChatPanel({ agent, sessionId, onBack }: ChatPanelProps) {
         ) : (
           <div className="py-4">
             {messages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} onRetry={msg.isError ? retryLastMessage : undefined} />
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                onRetry={msg.isError ? retryLastMessage : undefined}
+                onToolApproval={respondToToolApproval}
+              />
             ))}
             <div ref={messagesEndRef} />
           </div>

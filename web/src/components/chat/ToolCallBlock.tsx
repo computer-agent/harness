@@ -1,6 +1,7 @@
-import { Check, ChevronDown, ChevronRight, Loader2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Loader2, ShieldQuestion, X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { toolSummary } from "@/lib/ws-client";
@@ -10,15 +11,25 @@ const borderColors = {
   executing: "border-l-blue-500",
   complete: "border-l-green-500",
   error: "border-l-red-500",
+  needs_approval: "border-l-orange-500",
 };
 
 const statusIcons = {
   executing: <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" />,
   complete: <Check className="h-3.5 w-3.5 text-green-400" />,
   error: <X className="h-3.5 w-3.5 text-red-400" />,
+  needs_approval: <ShieldQuestion className="h-3.5 w-3.5 text-orange-400" />,
 };
 
-export function ToolCallBlock({ toolCall }: { toolCall: ToolCall }) {
+export function ToolCallBlock({
+  toolCall,
+  onApprove,
+  onDeny,
+}: {
+  toolCall: ToolCall;
+  onApprove?: (toolId: string) => void;
+  onDeny?: (toolId: string) => void;
+}) {
   const { t: _t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const canExpand = toolCall.status !== "executing";
@@ -44,6 +55,29 @@ export function ToolCallBlock({ toolCall }: { toolCall: ToolCall }) {
             <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
           ))}
       </CollapsibleTrigger>
+      {toolCall.status === "needs_approval" && (
+        <div className="my-1.5 ml-6 flex items-center gap-2">
+          {toolCall.question && <span className="text-xs text-orange-300">{toolCall.question}</span>}
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1 text-xs text-green-400 border-green-500/30 hover:bg-green-950/20"
+            onClick={() => onApprove?.(toolCall.id)}
+          >
+            <Check className="h-3 w-3" />
+            Allow
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1 text-xs text-red-400 border-red-500/30 hover:bg-red-950/20"
+            onClick={() => onDeny?.(toolCall.id)}
+          >
+            <X className="h-3 w-3" />
+            Deny
+          </Button>
+        </div>
+      )}
       <CollapsibleContent>
         <div className="mb-1.5 ml-2 space-y-2 border-l-2 border-border pl-4 text-xs">
           {toolCall.inputJson && (

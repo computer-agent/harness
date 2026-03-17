@@ -43,5 +43,6 @@ export interface ToolCall {
   name: string;
   inputJson: string;
   output?: string;
-  status: "executing" | "complete" | "error";
+  status: "executing" | "complete" | "error" | "needs_approval";
+  question?: string;
 }

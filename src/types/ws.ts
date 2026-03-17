@@ -20,7 +20,13 @@ export interface WsPing {
   type: "ping";
 }
 
-export type WsClientMessage = WsSubscribe | WsMessage | WsInterrupt | WsPing;
+export interface WsToolApprovalResponse {
+  type: "tool_approval";
+  toolId: string;
+  approved: boolean;
+}
+
+export type WsClientMessage = WsSubscribe | WsMessage | WsInterrupt | WsPing | WsToolApprovalResponse;
 
 // ─── Server → Client ───
 
@@ -131,6 +137,14 @@ export interface WsResult {
   };
 }
 
+export interface WsToolApprovalRequest {
+  type: "tool_approval";
+  toolId: string;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  question: string;
+}
+
 export interface WsReplay {
   type: "replay";
   messages: WsServerMessage[];
@@ -152,4 +166,5 @@ export type WsServerMessage =
   | WsError
   | WsStatus
   | WsResult
+  | WsToolApprovalRequest
   | WsReplay;

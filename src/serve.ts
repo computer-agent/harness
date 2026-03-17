@@ -58,6 +58,7 @@ interface ActiveConversation {
   activeQuery: Query | null;
   messageBuffer: MessageBuffer;
   user: AccessUser;
+  pendingApprovals: Map<string, (approved: boolean) => void>;
 }
 
 // ─── Global conversation buffer store ───
@@ -296,6 +297,7 @@ async function handleSubscribe(
     activeQuery: null,
     messageBuffer,
     user,
+    pendingApprovals: new Map(),
   };
 
   // Replay buffered messages if reconnecting
@@ -339,6 +341,36 @@ async function handleMessage(
   // If resume fails with "No conversation found", retry without resume.
   let resumeId = conversation.sdkSessionConfirmed ? (conversation.sessionId ?? undefined) : undefined;
 
+  const onToolApproval = async (
+    toolId: string,
+    toolName: string,
+    input: Record<string, unknown>,
+  ): Promise<boolean> => {
+    return new Promise((resolve) => {
+      conversation.pendingApprovals.set(toolId, resolve);
+      ws.send(
+        JSON.stringify({
+          type: "tool_approval",
+          toolId,
+          toolName,
+          toolInput: input,
+          question: `Allow ${toolName}?`,
+        }),
+      );
+    });
+  };
+
+  const onToolResult = (toolId: string, _toolName: string, output: string) => {
+    ws.send(
+      JSON.stringify({
+        type: "tool_result",
+        id: conversation.messageBuffer.nextId(),
+        toolId,
+        content: output,
+      }),
+    );
+  };
+
   let options = buildOptions(
     agentContext,
     {
@@ -347,6 +379,8 @@ async function handleMessage(
       cwd,
       agentEnv,
       toolFilter,
+      onToolApproval,
+      onToolResult,
     },
     config,
   );
@@ -381,7 +415,7 @@ async function handleMessage(
       // Retry without resume — treat as new conversation
       resumeId = undefined;
       userMessagePersisted = false;
-      options = buildOptions(agentContext, { systemPrompt, cwd, agentEnv, toolFilter }, config);
+      options = buildOptions(agentContext, { systemPrompt, cwd, agentEnv, toolFilter, onToolApproval, onToolResult }, config);
       q = sendMessage(msg.content, options);
     } else {
       throw err;
@@ -657,6 +691,15 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
               break;
             case "ping":
               ws.send(JSON.stringify({ type: "pong" }));
+              break;
+            case "tool_approval":
+              if (activeConversation?.pendingApprovals) {
+                const resolver = activeConversation.pendingApprovals.get(msg.toolId);
+                if (resolver) {
+                  resolver(msg.approved);
+                  activeConversation.pendingApprovals.delete(msg.toolId);
+                }
+              }
               break;
             case "interrupt":
               if (activeConversation?.activeQuery) {

@@ -26,6 +26,7 @@ function buildHooks(
   ctx: AgentContext,
   config: HarnessConfig,
   onInstructionsLoaded?: (filePath: string, memoryType: string, loadReason: string) => void,
+  onToolResult?: (toolId: string, toolName: string, output: string) => void,
 ): Partial<Record<HookEvent, HookCallbackMatcher[]>> | undefined {
   const hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> = {};
 
@@ -84,6 +85,24 @@ function buildHooks(
     },
   ];
 
+  if (onToolResult) {
+    if (!hooks.PostToolUse) hooks.PostToolUse = [];
+    hooks.PostToolUse.push({
+      hooks: [
+        async (input) => {
+          if (input.hook_event_name === "PostToolUse") {
+            const output =
+              typeof input.tool_response === "string"
+                ? input.tool_response
+                : JSON.stringify(input.tool_response ?? "");
+            onToolResult(input.tool_use_id, input.tool_name, output);
+          }
+          return { continue: true };
+        },
+      ],
+    });
+  }
+
   return Object.keys(hooks).length > 0 ? hooks : undefined;
 }
 
@@ -91,6 +110,7 @@ function buildCanUseTool(
   ctx: AgentContext,
   config: HarnessConfig,
   onAskUserQuestion?: (input: Record<string, unknown>) => Promise<Record<string, string> | null>,
+  onToolApproval?: (toolId: string, toolName: string, input: Record<string, unknown>) => Promise<boolean>,
 ): CanUseTool {
   return async (toolName, input, options) => {
     // Logging
@@ -116,6 +136,14 @@ function buildCanUseTool(
       return { behavior: "allow", updatedInput: { ...input, answers } };
     }
 
+    // Tool approval (serve mode)
+    if (onToolApproval) {
+      const approved = await onToolApproval(options.toolUseID, toolName, input);
+      if (!approved) {
+        return { behavior: "deny", message: "User denied tool execution" };
+      }
+    }
+
     return { behavior: "allow" as const };
   };
 }
@@ -130,11 +158,13 @@ export function buildOptions(
     toolFilter?: ToolFilter;
     onInstructionsLoaded?: (filePath: string, memoryType: string, loadReason: string) => void;
     onAskUserQuestion?: (input: Record<string, unknown>) => Promise<Record<string, string> | null>;
+    onToolApproval?: (toolId: string, toolName: string, input: Record<string, unknown>) => Promise<boolean>;
+    onToolResult?: (toolId: string, toolName: string, output: string) => void;
   },
   config: HarnessConfig,
 ): Options {
-  const hooks = buildHooks(ctx, config, opts.onInstructionsLoaded);
-  const canUseTool = buildCanUseTool(ctx, config, opts.onAskUserQuestion);
+  const hooks = buildHooks(ctx, config, opts.onInstructionsLoaded, opts.onToolResult);
+  const canUseTool = buildCanUseTool(ctx, config, opts.onAskUserQuestion, opts.onToolApproval);
   const cwd = opts.cwd ?? ctx.workspaceDir;
   const agentEnv = opts.agentEnv ?? {};
 

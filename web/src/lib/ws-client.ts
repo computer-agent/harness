@@ -16,7 +16,13 @@ export interface WsInterruptMsg {
   type: "interrupt";
 }
 
-export type WsClientMsg = WsSubscribeMsg | WsMessageMsg | WsInterruptMsg;
+export interface WsToolApprovalClientMsg {
+  type: "tool_approval";
+  toolId: string;
+  approved: boolean;
+}
+
+export type WsClientMsg = WsSubscribeMsg | WsMessageMsg | WsInterruptMsg | WsToolApprovalClientMsg;
 
 // Server message types (matching src/types/ws.ts)
 export interface WsConnectedMsg {
@@ -108,6 +114,21 @@ export interface WsThinkingTokenMsg {
   text: string;
 }
 
+export interface WsToolApprovalMsg {
+  type: "tool_approval";
+  toolId: string;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  question: string;
+}
+
+export interface WsToolResultMsg {
+  type: "tool_result";
+  id: number;
+  toolId: string;
+  content: string;
+}
+
 export interface WsReplayMsg {
   type: "replay";
   messages: WsServerMsg[];
@@ -127,6 +148,8 @@ export type WsServerMsg =
   | WsSubagentProgressMsg
   | WsSubagentDoneMsg
   | WsThinkingTokenMsg
+  | WsToolApprovalMsg
+  | WsToolResultMsg
   | WsReplayMsg;
 
 // Tool summary generation
