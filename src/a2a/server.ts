@@ -53,9 +53,19 @@ export async function startA2AServer(
     }),
   );
 
-  app.listen(port, () => {
+  // Bind to localhost only — use a reverse proxy for external access
+  const server = app.listen(port, "127.0.0.1", () => {
     console.log(`A2A server for agent "${agentContext.name}" running on port ${port}`);
     console.log(`  Agent Card: http://localhost:${port}/.well-known/agent-card.json`);
     console.log(`  JSON-RPC:   http://localhost:${port}/`);
+  });
+
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(`Port ${port} is already in use. Try a different port with --port.`);
+    } else {
+      console.error(`A2A server error: ${err.message}`);
+    }
+    process.exit(1);
   });
 }

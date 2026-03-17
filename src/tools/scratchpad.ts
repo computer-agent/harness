@@ -56,7 +56,10 @@ export function createScratchpadTools(workspaceDir: string) {
       path: z.string().optional().describe("Subdirectory within .scratch/ to list. Omit for top-level."),
     },
     async ({ path }) => {
-      const target = path ? join(scratchDir, path) : scratchDir;
+      const target = path ? resolve(scratchDir, path) : scratchDir;
+      if (path && !target.startsWith(`${resolve(scratchDir)}/`) && target !== resolve(scratchDir)) {
+        return { content: [{ type: "text" as const, text: "Path must be within .scratch/" }] };
+      }
       try {
         const entries = await readdir(target, { withFileTypes: true });
         const items = entries.map((e) => (e.isDirectory() ? `${e.name}/` : e.name));
