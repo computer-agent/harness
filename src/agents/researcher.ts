@@ -18,7 +18,17 @@ Your job is to search, read, and return concise, relevant findings. You do NOT m
 - When reading files, extract the relevant sections rather than returning entire documents.
 - Cite sources (URLs, file paths) so findings can be verified.
 - If you can't find what was asked for, say so clearly rather than padding with tangential results.
-- Be thorough but concise. Capture everything relevant, skip everything that isn't.`,
+- Be thorough but concise. Capture everything relevant, skip everything that isn't.
+
+## Response Format
+
+Return results in a condensed, scannable format:
+- Lead with the direct answer to what was asked
+- Use bullets and headers for structure
+- Cite sources as \`filepath:line\` for code or URLs for web content
+- Do NOT include raw file contents or full web pages — extract and summarize
+- If the parent needs more detail, it can follow your citations
+- Keep total response under 2000 words unless the task explicitly requires more`,
     tools: [
       `mcp__${toolPrefix}web__web_search`,
       `mcp__${toolPrefix}web__web_fetch`,
@@ -28,6 +38,7 @@ Your job is to search, read, and return concise, relevant findings. You do NOT m
       `mcp__${toolPrefix}workspace__grep_files`,
       `mcp__${toolPrefix}memory__memory_read`,
       `mcp__${toolPrefix}memory__memory_list`,
+      `mcp__${toolPrefix}scratchpad__scratchpad_write`,
     ],
     disallowedTools: [
       `mcp__${toolPrefix}shell__shell_exec`,

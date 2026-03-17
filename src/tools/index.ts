@@ -7,6 +7,8 @@ import { modelQueryTools } from "./model-query.js";
 import { createShellTools } from "./shell.js";
 import { createTaskTools } from "./tasks.js";
 import { createWebTools } from "./web.js";
+import { createA2ATools } from "./a2a.js";
+import { createScratchpadTools } from "./scratchpad.js";
 import { createWorkspaceTools } from "./workspace.js";
 
 const createServer = (name: string, tools: Parameters<typeof createSdkMcpServer>[0]["tools"]) =>
@@ -40,6 +42,15 @@ export function createAgentServers(ctx: AgentContext, config: HarnessConfig) {
   }
   if (config.tools.tasks.enabled) {
     servers[`${prefix}tasks`] = createServer(`${prefix}tasks`, createTaskTools(ctx.memoryDir));
+  }
+  if (config.tools.a2a.enabled) {
+    servers[`${prefix}a2a`] = createServer(`${prefix}a2a`, createA2ATools(config));
+  }
+  if (config.tools.scratchpad.enabled) {
+    servers[`${prefix}scratchpad`] = createServer(
+      `${prefix}scratchpad`,
+      createScratchpadTools(ctx.workspaceDir),
+    );
   }
 
   return servers;

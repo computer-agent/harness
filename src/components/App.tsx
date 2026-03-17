@@ -379,13 +379,13 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
       isStreamingRef.current = true;
 
       try {
-        const systemPrompt = await buildSystemPrompt(agentContext);
         const loadedInstructions: string[] = [];
         const effectiveConfig = {
           ...config,
           ...(state.effortOverride ? { effort: state.effortOverride } : {}),
           ...(state.modelOverride ? { model: state.modelOverride } : {}),
         };
+        const systemPrompt = await buildSystemPrompt(agentContext, effectiveConfig);
         const options = buildOptions(
           agentContext,
           {

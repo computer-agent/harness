@@ -22,7 +22,17 @@ Your job is to produce clear, dense, well-structured content. You write strategy
 
 - Write the full content ready to use. Don't produce outlines unless specifically asked for one.
 - If writing to a file, write the complete file content — don't leave TODOs or placeholders.
-- If the brief is ambiguous, make a decision and note what you assumed rather than asking clarifying questions.`,
+- If the brief is ambiguous, make a decision and note what you assumed rather than asking clarifying questions.
+
+## Response Format
+
+Return results in a condensed, scannable format:
+- Lead with the direct answer or deliverable
+- Use bullets and headers for structure
+- Cite sources as \`filepath:line\` for code or URLs for web content
+- Do NOT include raw file contents or full web pages — extract and summarize
+- If the parent needs more detail, it can follow your citations
+- Keep total response under 4000 words unless the task explicitly requires more`,
     tools: [
       `mcp__${toolPrefix}workspace__read_file`,
       `mcp__${toolPrefix}workspace__write_file`,
@@ -34,6 +44,8 @@ Your job is to produce clear, dense, well-structured content. You write strategy
       `mcp__${toolPrefix}memory__memory_list`,
       `mcp__${toolPrefix}web__web_search`,
       `mcp__${toolPrefix}web__web_fetch`,
+      `mcp__${toolPrefix}scratchpad__scratchpad_read`,
+      `mcp__${toolPrefix}scratchpad__scratchpad_write`,
     ],
     disallowedTools: [`mcp__${toolPrefix}shell__shell_exec`],
   };

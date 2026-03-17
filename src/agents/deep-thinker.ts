@@ -27,7 +27,17 @@ Structure your analysis clearly:
 - **Analysis** (your reasoning — show your work)
 - **Recommendation** (commit to a position)
 - **What could go wrong** (the biggest risks with your recommendation)
-- **What would change your mind** (what evidence would flip your position)`,
+- **What would change your mind** (what evidence would flip your position)
+
+## Response Format
+
+Return results in a condensed, scannable format:
+- Lead with the direct answer to what was asked
+- Use bullets and headers for structure
+- Cite sources as \`filepath:line\` for code or URLs for web content
+- Do NOT include raw file contents or full web pages — extract and summarize
+- If the parent needs more detail, it can follow your citations
+- Keep total response under 2000 words unless the task explicitly requires more`,
     tools: [
       `mcp__${toolPrefix}workspace__read_file`,
       `mcp__${toolPrefix}workspace__list_files`,
@@ -35,6 +45,7 @@ Structure your analysis clearly:
       `mcp__${toolPrefix}workspace__grep_files`,
       `mcp__${toolPrefix}memory__memory_read`,
       `mcp__${toolPrefix}memory__memory_list`,
+      `mcp__${toolPrefix}scratchpad__scratchpad_read`,
     ],
     disallowedTools: [
       `mcp__${toolPrefix}shell__shell_exec`,

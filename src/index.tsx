@@ -179,6 +179,27 @@ if (sandboxEnabled && !process.env.HARNESS_SANDBOXED) {
   execInSandbox(agentContext, sandboxConfig, filteredArgv, agentEnvKeys);
 }
 
+// --- Flag: --card (output Agent Card JSON and exit) ---
+
+if (getFlag("card")) {
+  const { buildAgentCard } = await import("./a2a/agent-card.js");
+  const { loadIdentity } = await import("./prompt.js");
+  const identity = await loadIdentity(agentContext.identityPath);
+  const port = Number(getFlagValue("port")) || config.a2a.port;
+  const card = buildAgentCard(agentContext.name, identity, { port });
+  console.log(JSON.stringify(card, null, 2));
+  process.exit(0);
+}
+
+// --- Flag: --serve (A2A server mode) ---
+
+if (getFlag("serve")) {
+  const port = Number(getFlagValue("port")) || config.a2a.port;
+  const { startA2AServer } = await import("./a2a/server.js");
+  await startA2AServer(agentContext, config, port);
+  // Server runs indefinitely — don't proceed to TUI
+} else {
+
 const sessionDirs = { sessionsDir: agentContext.sessionsDir, lastSessionFile: agentContext.lastSessionFile };
 
 // --- Flag: --message (headless mode) ---
@@ -193,7 +214,7 @@ if (messageIdx !== -1) {
   }
 
   try {
-    const systemPrompt = await buildSystemPrompt(agentContext);
+    const systemPrompt = await buildSystemPrompt(agentContext, config);
     const options = buildOptions(agentContext, { systemPrompt }, config);
     const stream = sendMessage(message, options);
 
@@ -275,3 +296,5 @@ if (messageIdx !== -1) {
   );
   setInkClear(instance.clear);
 }
+
+} // close --serve else block

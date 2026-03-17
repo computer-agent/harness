@@ -14,11 +14,23 @@ export interface HarnessConfig {
     tasks: { enabled: boolean };
     introspection: { enabled: boolean };
     models: { enabled: boolean };
+    scratchpad: { enabled: boolean };
+    a2a: { enabled: boolean };
   };
   hooks: {
     logToolUse: boolean;
+    verifyBeforeComplete: boolean;
+    loopDetection: boolean;
+    loopDetectionThreshold: number;
+    compactSuccessOutput: boolean;
+    compactOutputThreshold: number;
   };
   effort: "low" | "medium" | "high" | "max";
+  a2a: {
+    enabled: boolean;
+    port: number;
+    agents: Record<string, { url: string; description: string }>;
+  };
 }
 
 const DEFAULTS: HarnessConfig = {
@@ -32,11 +44,23 @@ const DEFAULTS: HarnessConfig = {
     tasks: { enabled: true },
     introspection: { enabled: true },
     models: { enabled: true },
+    scratchpad: { enabled: true },
+    a2a: { enabled: true },
   },
   hooks: {
     logToolUse: false,
+    verifyBeforeComplete: true,
+    loopDetection: true,
+    loopDetectionThreshold: 3,
+    compactSuccessOutput: true,
+    compactOutputThreshold: 50,
   },
   effort: "max",
+  a2a: {
+    enabled: true,
+    port: 4000,
+    agents: {},
+  },
 };
 
 export function getHomeDir(): string {
@@ -106,4 +130,22 @@ tools:
 hooks:
   # Log every tool call to stderr log (tool name, inputs, timing)
   logToolUse: false
+  # Remind agent to verify file changes before completing a task
+  verifyBeforeComplete: true
+  # Detect and warn about repeated edits to the same file
+  loopDetection: true
+  loopDetectionThreshold: 3
+  # Truncate long successful command output, preserve full failure output
+  compactSuccessOutput: true
+  compactOutputThreshold: 50
+
+# A2A protocol configuration
+a2a:
+  enabled: true
+  port: 4000         # default port for --serve mode
+  agents: {}         # registered remote A2A agents
+  # Example:
+  #   data-pipeline:
+  #     url: http://data-agent.internal:4000
+  #     description: "LangGraph data pipeline agent"
 `;
