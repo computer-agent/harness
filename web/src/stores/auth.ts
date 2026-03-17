@@ -2,6 +2,10 @@ import { create } from "zustand";
 import { api } from "@/lib/api";
 import { TOKEN_KEY } from "@/lib/constants";
 
+/** Whitelisted error keys that map to auth.* i18n translations */
+export const VALID_AUTH_ERROR_KEYS = ["invalidToken"] as const;
+export type AuthErrorKey = (typeof VALID_AUTH_ERROR_KEYS)[number];
+
 interface AuthStore {
   token: string | null;
   isValidated: boolean;
@@ -13,19 +17,33 @@ interface AuthStore {
 }
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
-  token: localStorage.getItem(TOKEN_KEY),
+  token: (() => {
+    try {
+      return sessionStorage.getItem(TOKEN_KEY);
+    } catch {
+      return null;
+    }
+  })(),
   isValidated: false,
   isValidating: false,
   error: null,
 
   setToken: (token: string) => {
-    localStorage.setItem(TOKEN_KEY, token);
+    try {
+      sessionStorage.setItem(TOKEN_KEY, token);
+    } catch {
+      // sessionStorage unavailable — token still set in-memory
+    }
     // Don't set isValidated here — wait for validate() to confirm
     set({ token, error: null, isValidated: false });
   },
 
   clearToken: () => {
-    localStorage.removeItem(TOKEN_KEY);
+    try {
+      sessionStorage.removeItem(TOKEN_KEY);
+    } catch {
+      // sessionStorage unavailable
+    }
     set({ token: null, isValidated: false, error: null });
   },
 

@@ -6,7 +6,7 @@ export function useAuth() {
   const { token, isValidated, isValidating, error, validate, setToken, clearToken } = useAuthStore();
   const [isReady, setIsReady] = useState(false);
 
-  // On mount: validate existing token from localStorage
+  // On mount: validate existing token from sessionStorage
   useEffect(() => {
     if (SKIP_AUTH) {
       setIsReady(true);

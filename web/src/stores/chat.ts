@@ -124,7 +124,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         msgs[msgs.length - 1] = { ...last, content, isStreaming: false, toolCalls };
       }
       // Also persist to cache
-      const key = get().activeKey;
+      const key = s.activeKey;
       const newLastId = Math.max(s.lastMessageId, id);
       const cache = { ...s.cache, [key]: { messages: msgs, lastMessageId: newLastId } };
       return { messages: msgs, isStreaming: false, lastMessageId: newLastId, cache };

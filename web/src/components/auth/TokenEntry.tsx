@@ -5,6 +5,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { VALID_AUTH_ERROR_KEYS } from "@/stores/auth";
 
 interface TokenEntryProps {
   onSubmit: (token: string) => void;
@@ -63,7 +64,9 @@ export function TokenEntry({ onSubmit, isValidating, error }: TokenEntryProps) {
             </Button>
             {error && (
               <Alert variant="destructive" role="alert" id="token-error">
-                <AlertDescription>{t(`auth.${error}`)}</AlertDescription>
+                <AlertDescription>
+                  {t(`auth.${(VALID_AUTH_ERROR_KEYS as readonly string[]).includes(error) ? error : "invalidToken"}`)}
+                </AlertDescription>
               </Alert>
             )}
           </form>

@@ -20,7 +20,7 @@ import { loadAgentEnv } from "./env.js";
 import { classifyError } from "./errors.js";
 import type { AgentManifest } from "./manifest.js";
 import { MessageBuffer } from "./message-buffer.js";
-import { type PersistedMessage, appendMessage, loadMessages } from "./message-store.js";
+import { appendMessage, loadMessages, type PersistedMessage } from "./message-store.js";
 import {
   createSessionMeta,
   deleteSession,
@@ -337,7 +337,7 @@ async function handleMessage(
 
   // Only resume if we have a session ID that came from the SDK (not a pre-created REST session).
   // If resume fails with "No conversation found", retry without resume.
-  let resumeId = conversation.sdkSessionConfirmed ? conversation.sessionId ?? undefined : undefined;
+  let resumeId = conversation.sdkSessionConfirmed ? (conversation.sessionId ?? undefined) : undefined;
 
   let options = buildOptions(
     agentContext,
@@ -350,23 +350,6 @@ async function handleMessage(
     },
     config,
   );
-
-  let q: ReturnType<typeof sendMessage>;
-  try {
-    q = sendMessage(msg.content, options);
-    // Peek at the first message to detect session-not-found errors early
-    // (the SDK throws synchronously or on first iteration)
-  } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    if (resumeId && errMsg.includes("No conversation found")) {
-      // Retry without resume — treat as new conversation
-      options = buildOptions(agentContext, { systemPrompt, cwd, agentEnv, toolFilter }, config);
-      q = sendMessage(msg.content, options);
-    } else {
-      throw err;
-    }
-  }
-  conversation.activeQuery = q;
 
   let responseBuffer = "";
   let wasInterrupted = false;
@@ -387,6 +370,25 @@ async function handleMessage(
     await appendMessage(sessionDirs, conversation.sessionId, userMsg);
   };
 
+  let q: ReturnType<typeof sendMessage>;
+  try {
+    q = sendMessage(msg.content, options);
+    // Peek at the first message to detect session-not-found errors early
+    // (the SDK throws synchronously or on first iteration)
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (resumeId && errMsg.includes("No conversation found")) {
+      // Retry without resume — treat as new conversation
+      resumeId = undefined;
+      userMessagePersisted = false;
+      options = buildOptions(agentContext, { systemPrompt, cwd, agentEnv, toolFilter }, config);
+      q = sendMessage(msg.content, options);
+    } else {
+      throw err;
+    }
+  }
+  conversation.activeQuery = q;
+
   // If resuming an existing session, persist user message immediately
   if (conversation.sdkSessionConfirmed && conversation.sessionId) {
     await persistUserMessage();
@@ -396,8 +398,14 @@ async function handleMessage(
     for await (const sdkMsg of q) {
       // Capture session ID from init
       if (sdkMsg.type === "system" && (sdkMsg as any).subtype === "init" && sdkMsg.session_id) {
+        const oldSessionId = conversation.sessionId;
         conversation.sessionId = sdkMsg.session_id;
         conversation.sdkSessionConfirmed = true;
+        // Delete orphaned buffer entry if the session ID changed (e.g. pre-created REST session → real SDK session)
+        if (oldSessionId && oldSessionId !== sdkMsg.session_id) {
+          const oldKey = bufferKey(conversation.agentId, oldSessionId, user.name);
+          conversationBuffers.delete(oldKey);
+        }
         // Register the buffer under the real session ID
         const key = bufferKey(conversation.agentId, sdkMsg.session_id, user.name);
         if (!conversationBuffers.has(key)) {
@@ -528,6 +536,17 @@ async function handleMessage(
       }
     }
   } catch (err) {
+    // Ensure user message is persisted even on error, if we have a session
+    if (!userMessagePersisted && conversation.sessionId) {
+      try {
+        await persistUserMessage();
+      } catch (persistErr) {
+        console.error("[serve] Failed to persist user message on error path:", persistErr);
+      }
+    }
+    if (!userMessagePersisted) {
+      console.warn("[serve] User message was not persisted — no session ID was confirmed before error");
+    }
     const classified = classifyError(err);
     ws.send(
       JSON.stringify({
@@ -624,22 +643,37 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
           return;
         }
 
-        switch (msg.type) {
-          case "subscribe":
-            activeConversation = await handleSubscribe(ws, msg, user);
-            break;
-          case "message":
-            if (!activeConversation) {
-              ws.send(JSON.stringify({ type: "error", code: "not_subscribed", message: "Subscribe first" }));
-              return;
-            }
-            await handleMessage(ws, msg, activeConversation, opts.config, usageTracker);
-            break;
-          case "interrupt":
-            if (activeConversation?.activeQuery) {
-              activeConversation.activeQuery.interrupt();
-            }
-            break;
+        try {
+          switch (msg.type) {
+            case "subscribe":
+              activeConversation = await handleSubscribe(ws, msg, user);
+              break;
+            case "message":
+              if (!activeConversation) {
+                ws.send(JSON.stringify({ type: "error", code: "not_subscribed", message: "Subscribe first" }));
+                return;
+              }
+              await handleMessage(ws, msg, activeConversation, opts.config, usageTracker);
+              break;
+            case "interrupt":
+              if (activeConversation?.activeQuery) {
+                activeConversation.activeQuery.interrupt();
+              }
+              break;
+          }
+        } catch (err) {
+          const classified = classifyError(err);
+          try {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                code: classified.category,
+                message: classified.message,
+              }),
+            );
+          } catch {
+            // Connection already closed — nothing we can do
+          }
         }
       });
 
@@ -658,8 +692,32 @@ export async function startServer(opts: ServeOptions): Promise<void> {
   const app = Fastify({ logger: true });
   const usageTracker = new UsageTracker();
 
+  // CORS: validate origins against an allowlist.
+  // ALLOWED_ORIGINS env var: comma-separated list (e.g. "https://app.example.com,https://staging.example.com")
+  // If unset (dev mode), allow any localhost origin.
+  const allowedOriginsEnv = process.env.ALLOWED_ORIGINS;
+  const allowedOrigins = allowedOriginsEnv
+    ? allowedOriginsEnv
+        .split(",")
+        .map((o) => o.trim())
+        .filter(Boolean)
+    : null; // null = dev mode (allow localhost)
+
   await app.register(fastifyCors, {
-    origin: true,
+    origin: (origin, callback) => {
+      // Allow requests with no origin (same-origin, curl, non-browser clients)
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins) {
+        // Production: check against explicit allowlist
+        if (allowedOrigins.includes(origin)) return callback(null, true);
+      } else {
+        // Dev mode: allow any localhost/127.0.0.1 origin (any port)
+        if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true);
+      }
+
+      callback(new Error(`Origin ${origin} not allowed by CORS`), false);
+    },
     methods: ["GET", "POST", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
   });

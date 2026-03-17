@@ -1,8 +1,14 @@
 import { API_URL, TOKEN_KEY } from "./constants";
 
 function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+  try {
+    return sessionStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
 }
+
+const REQUEST_TIMEOUT_MS = 30_000;
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = getToken();
@@ -12,7 +18,26 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${API_URL}${path}`, { ...opts, headers });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      ...opts,
+      headers,
+      signal: opts.signal
+        ? AbortSignal.any([opts.signal, controller.signal])
+        : controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (controller.signal.aborted) {
+      throw new Error(`Request to ${path} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+    }
+    throw err;
+  }
+  clearTimeout(timeoutId);
 
   if (res.status === 401 || res.status === 403) {
     throw new Error("auth_failed");
@@ -23,7 +48,11 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     throw new Error(body.error ?? `HTTP ${res.status}`);
   }
 
-  return res.json();
+  try {
+    return await res.json();
+  } catch {
+    throw new Error(`Invalid JSON in response from ${path}`);
+  }
 }
 
 export const api = {

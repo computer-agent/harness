@@ -27,12 +27,22 @@ function applyTheme(theme: Theme) {
     ?.setAttribute("content", resolved === "dark" ? "#09090b" : "#ffffff");
 }
 
-const stored = (localStorage.getItem(THEME_KEY) as Theme) ?? "dark";
+let stored: Theme = "dark";
+try {
+  stored = (localStorage.getItem(THEME_KEY) as Theme) ?? "dark";
+} catch {
+  // localStorage unavailable (e.g. Safari private mode) — use default
+}
 applyTheme(stored);
 
 // Listen for system theme changes
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-  const current = (localStorage.getItem(THEME_KEY) as Theme) ?? "dark";
+  let current: Theme = "dark";
+  try {
+    current = (localStorage.getItem(THEME_KEY) as Theme) ?? "dark";
+  } catch {
+    // fall back to default
+  }
   if (current === "system") applyTheme("system");
 });
 
@@ -41,7 +51,11 @@ export const useUiStore = create<UiStore>((set, get) => ({
   sidebarOpen: false,
 
   setTheme: (theme) => {
-    localStorage.setItem(THEME_KEY, theme);
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      // localStorage unavailable — theme still applied in-memory
+    }
     applyTheme(theme);
     set({ theme });
   },

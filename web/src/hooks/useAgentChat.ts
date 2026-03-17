@@ -9,16 +9,28 @@ import type { ChatMessage, ToolCall } from "@/types";
 export type ConnectionState = "connected" | "connecting" | "reconnecting" | "disconnected";
 
 export function useAgentChat(agentId: string | undefined, sessionId: string | null) {
-  const token = localStorage.getItem(TOKEN_KEY);
+  let token: string | null = null;
+  try {
+    token = sessionStorage.getItem(TOKEN_KEY);
+  } catch {
+    // sessionStorage unavailable
+  }
 
   // Use refs to avoid stale closures in WebSocket callbacks
   const agentIdRef = useRef(agentId);
   const sessionIdRef = useRef(sessionId);
   const subscribedRef = useRef(false);
+  // Captures the agentId at the time a message was sent, to guard against
+  // race conditions when the user switches agents during streaming (FIX-06)
+  const sentAgentIdRef = useRef(agentId);
 
-  // Keep refs in sync with props
-  agentIdRef.current = agentId;
-  sessionIdRef.current = sessionId;
+  // Keep refs in sync with props via useEffect (FIX-14)
+  useEffect(() => {
+    agentIdRef.current = agentId;
+  }, [agentId]);
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   const store = useChatStore();
 
@@ -39,24 +51,23 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
       const aid = agentIdRef.current;
       const sid = sessionIdRef.current;
       if (aid) {
-        sendSubscribe(aid, sid);
+        sendSubscribe(aid, sid, useChatStore.getState().lastMessageId);
       }
     },
   });
 
   const sendSubscribe = useCallback(
-    (aid: string, sid: string | null) => {
-      const lastId = store.lastMessageId;
+    (aid: string, sid: string | null, lastMessageId: number) => {
       const msg: WsClientMsg = {
         type: "subscribe",
         agentId: aid,
         ...(sid ? { sessionId: sid } : {}),
-        ...(lastId ? { lastMessageId: lastId } : {}),
+        ...(lastMessageId ? { lastMessageId } : {}),
       };
       sendJsonMessage(msg);
       subscribedRef.current = true;
     },
-    [sendJsonMessage, store.lastMessageId],
+    [sendJsonMessage],
   );
 
   // Switch conversation (save old messages, restore cached ones) when agent/session changes
@@ -98,7 +109,7 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
     }
 
     if (agentId && readyState === ReadyState.OPEN) {
-      sendSubscribe(agentId, sessionId);
+      sendSubscribe(agentId, sessionId, useChatStore.getState().lastMessageId);
     }
   }, [agentId, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -144,9 +155,11 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
       case "result":
         if (msg.sessionId) {
           sessionIdRef.current = msg.sessionId;
-          // Migrate cache key from "agent:new" to "agent:realSessionId"
-          const realKey = conversationKey(agentIdRef.current ?? "", msg.sessionId);
-          store.updateActiveKey(realKey);
+          // Only migrate cache key if the agent hasn't changed since the message was sent (FIX-06)
+          if (agentIdRef.current === sentAgentIdRef.current) {
+            const realKey = conversationKey(agentIdRef.current ?? "", msg.sessionId);
+            store.updateActiveKey(realKey);
+          }
         }
         store.setStreaming(false);
         store.setStatus(msg.interrupted ? "interrupted" : "idle");
@@ -174,6 +187,8 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
         store.queuePendingMessage(content);
         return;
       }
+      // Capture the agent ID at send time so we can guard the result handler (FIX-06)
+      sentAgentIdRef.current = agentIdRef.current;
       store.addUserMessage(content);
       sendJsonMessage({ type: "message", content });
     },

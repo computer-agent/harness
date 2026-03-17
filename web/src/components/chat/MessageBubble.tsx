@@ -1,5 +1,5 @@
 import { Check, Copy } from "lucide-react";
-import { type ComponentProps, useCallback, useState } from "react";
+import { Component, type ComponentProps, type ErrorInfo, memo, type ReactNode, useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import Markdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -8,7 +8,35 @@ import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@/types";
 import { ToolCallBlock } from "./ToolCallBlock";
 
-export function MessageBubble({ message }: { message: ChatMessage }) {
+// FIX-07: Error boundary to prevent markdown parse failures from crashing the chat UI
+class MarkdownErrorBoundary extends Component<
+  { children: ReactNode; fallbackContent: string },
+  { hasError: boolean }
+> {
+  constructor(props: { children: ReactNode; fallbackContent: string }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error("Markdown rendering failed:", error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <pre className="whitespace-pre-wrap break-words text-sm">{this.props.fallbackContent}</pre>;
+    }
+    return this.props.children;
+  }
+}
+
+// FIX-16: Memoize to avoid re-rendering every bubble when a new message arrives.
+// ToolCallBlock is intentionally NOT memoized — it has dynamic internal state.
+export const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMessage }) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end px-4 py-1" data-role="user">
@@ -30,15 +58,22 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
         {/* Markdown content */}
         {message.content && (
           <div className={cn("prose dark:prose-invert prose-sm max-w-none", message.isStreaming && "streaming-cursor")}>
-            <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={{ code: CodeBlock }}>
-              {message.content}
-            </Markdown>
+            <MarkdownErrorBoundary fallbackContent={message.content}>
+              <Markdown
+                remarkPlugins={[remarkGfm]}
+                rehypePlugins={[rehypeHighlight]}
+                skipHtml
+                components={{ code: CodeBlock }}
+              >
+                {message.content}
+              </Markdown>
+            </MarkdownErrorBoundary>
           </div>
         )}
       </div>
     </div>
   );
-}
+});
 
 function CodeBlock({ children, className, ...props }: ComponentProps<"code">) {
   const { t } = useTranslation();

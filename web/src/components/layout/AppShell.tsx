@@ -19,7 +19,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   const toggleLang = () => {
     const next = i18n.language === "pt-BR" ? "en" : "pt-BR";
     i18n.changeLanguage(next);
-    localStorage.setItem("mastersof-ai-lang", next);
+    try {
+      localStorage.setItem("mastersof-ai-lang", next);
+    } catch {
+      // localStorage unavailable — language still changed in-memory
+    }
     document.documentElement.lang = next;
   };
 
