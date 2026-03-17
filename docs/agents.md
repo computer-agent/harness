@@ -22,12 +22,17 @@ Each agent is a directory under `agents/` containing an `IDENTITY.md` file:
 ### System Prompt Assembly
 
 ```
-[Agent identity — the IDENTITY.md content]
-[Persistent memory from CONTEXT.md, if present]
+[Agent identity — IDENTITY.md content]
+[Persistent memory — CONTEXT.md, if present]
 [Current date, time, and timezone]
+[Workspace path]
+[Environment onboarding — workspace files, outstanding work, available tools]
+[Verification protocol — if hooks.verifyBeforeComplete is true]
+[Session continuity — PROGRESS.json guidance]
+[Sub-agent coordination — scratchpad guidance, if scratchpad tool enabled]
 ```
 
-The identity file is loaded as-is (no frontmatter parsing). Memory is wrapped with a header explaining it's accumulated context from previous sessions. Date/time uses the system timezone.
+The identity file is loaded as-is (no frontmatter parsing). Memory is wrapped with a header explaining it's accumulated context from previous sessions. Date/time uses the system timezone. The environment section lists workspace files (top-level, max 20), any outstanding items from PROGRESS.json, and enabled tool domains.
 
 ## Sub-Agents
 
@@ -44,6 +49,10 @@ Each sub-agent specifies `maxTurns` to prevent runaway loops and `disallowedTool
 | researcher | 30 | file write, shell exec |
 | deep-thinker | 15 | file write, shell exec |
 | writer | 20 | shell exec |
+
+## Sub-Agent Scratchpad
+
+Sub-agents coordinate through a shared `.scratch/` directory in the agent's workspace. The parent agent directs sub-agents to write intermediate results there rather than returning everything through the parent's context window. The scratchpad tool (`scratchpad_read`, `scratchpad_write`, `scratchpad_list`) provides scoped access — paths are confined to `.scratch/`.
 
 ## Persistent Memory
 

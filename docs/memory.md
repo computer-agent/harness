@@ -19,6 +19,10 @@ At startup, the harness checks for `CONTEXT.md` in the agent's memory directory.
 [Persistent memory — CONTEXT.md, if present]
 [Current date, time, timezone]
 [Workspace path]
+[Environment onboarding]
+[Verification protocol]
+[Session continuity]
+[Sub-agent coordination]
 ```
 
 The agent sees this context immediately — no tool call needed. This is the "what you already know" layer. A fresh agent with no `CONTEXT.md` starts with a blank slate. An experienced agent starts with accumulated knowledge.
