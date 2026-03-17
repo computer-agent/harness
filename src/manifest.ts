@@ -20,10 +20,20 @@ const ToolFilterSchema = z
     message: "tools.allow and tools.deny are mutually exclusive",
   });
 
-const McpServerSchema = z.object({
-  server: z.string(),
-  uri: z.string(),
-});
+const McpServerSchema = z
+  .object({
+    server: z.string().regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/i, "Server name must be alphanumeric with hyphens"),
+    uri: z.string().url().optional(),
+    command: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+  })
+  .refine(
+    (val) => (val.uri ? !val.command : !!val.command),
+    { message: "Exactly one of uri or command must be specified" },
+  );
+
+export type McpServerManifest = z.infer<typeof McpServerSchema>;
 
 const SandboxSchema = z.object({
   enforce: z.boolean().optional(),

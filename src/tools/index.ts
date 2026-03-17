@@ -1,7 +1,8 @@
-import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, type McpServerConfig as SdkMcpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentContext } from "../agent-context.js";
 import type { HarnessConfig } from "../config.js";
-import type { ToolDomain } from "../manifest.js";
+import type { Logger } from "../logger.js";
+import type { McpServerManifest, ToolDomain } from "../manifest.js";
 import type { RemoteSandboxPolicy } from "../sandbox.js";
 import { createIntrospectionTools } from "./introspection.js";
 import { createMemoryTools } from "./memory.js";
@@ -88,4 +89,95 @@ export function createAgentServers(
   }
 
   return servers;
+}
+
+// --- External MCP server merging ---
+
+// Harness server names that external MCP servers cannot collide with
+const HARNESS_SERVER_SUFFIXES = ["memory", "web", "introspection", "workspace", "shell", "models", "tasks"];
+
+/**
+ * Resolve ${VAR} references in MCP env config against the agent's .env values.
+ * Uses simple string replacement — NEVER shell evaluation.
+ */
+function resolveEnvVars(
+  env: Record<string, string> | undefined,
+  agentEnv: Record<string, string>,
+): Record<string, string> | undefined {
+  if (!env) return undefined;
+  const resolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    resolved[key] = value.replace(/\$\{([^}]+)\}/g, (_, varName) => agentEnv[varName] ?? "");
+  }
+  return resolved;
+}
+
+/**
+ * Merge external MCP servers declared in agent frontmatter with harness servers.
+ *
+ * @param harnessServers - Servers created by createAgentServers()
+ * @param mcpConfigs - MCP server configs from agent frontmatter
+ * @param agentPrefix - Agent name prefix (e.g. "cre-analyst-")
+ * @param agentEnv - Agent .env values for ${VAR} resolution
+ * @param isRemoteSession - Whether this is a serve mode session
+ * @param sandboxPolicy - Remote sandbox policy (if remote)
+ * @param logger - Optional logger
+ * @returns Merged servers record
+ */
+export function mergeExternalMcpServers(
+  harnessServers: Record<string, SdkMcpServerConfig>,
+  mcpConfigs: McpServerManifest[],
+  agentPrefix: string,
+  agentEnv: Record<string, string>,
+  isRemoteSession: boolean,
+  sandboxPolicy?: RemoteSandboxPolicy,
+  logger?: Logger,
+): Record<string, SdkMcpServerConfig> {
+  const merged: Record<string, SdkMcpServerConfig> = { ...harnessServers };
+
+  for (const mcp of mcpConfigs) {
+    // Check for name collisions with harness servers
+    const collidesWithHarness = HARNESS_SERVER_SUFFIXES.some(
+      (suffix) => `${agentPrefix}${suffix}` === mcp.server || suffix === mcp.server,
+    );
+    if (collidesWithHarness) {
+      logger?.warn("mcp", "mcp.collision", `MCP server name "${mcp.server}" collides with harness server — skipped`);
+      continue;
+    }
+    if (merged[mcp.server]) {
+      logger?.warn("mcp", "mcp.collision", `Duplicate MCP server name "${mcp.server}" — skipped`);
+      continue;
+    }
+
+    if (mcp.uri) {
+      // Remote MCP — always allowed (use streamable HTTP transport)
+      merged[mcp.server] = { type: "http", url: mcp.uri };
+      logger?.info("mcp", "mcp.configured", `URI-based MCP server configured: ${mcp.server}`, {
+        details: { server: mcp.server, uri: mcp.uri },
+      });
+    } else if (mcp.command) {
+      if (isRemoteSession && !sandboxPolicy) {
+        // Remote session without sandbox — skip command-based MCP
+        logger?.warn(
+          "mcp",
+          "mcp.skipped",
+          `Command-based MCP server "${mcp.server}" skipped — remote session without sandbox`,
+        );
+        continue;
+      }
+      // Command-based MCP — allowed in CLI mode or sandboxed remote (stdio transport)
+      const resolvedEnv = resolveEnvVars(mcp.env, agentEnv);
+      merged[mcp.server] = {
+        type: "stdio",
+        command: mcp.command,
+        ...(mcp.args ? { args: mcp.args } : {}),
+        ...(resolvedEnv ? { env: resolvedEnv } : {}),
+      };
+      logger?.info("mcp", "mcp.configured", `Command-based MCP server configured: ${mcp.server}`, {
+        details: { server: mcp.server, command: mcp.command },
+      });
+    }
+  }
+
+  return merged;
 }

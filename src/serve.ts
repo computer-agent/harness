@@ -428,6 +428,8 @@ async function handleMessage(
       onToolApproval,
       onToolResult,
       sandboxPolicy,
+      mcpConfigs: manifest.frontmatter.mcp,
+      isRemoteSession: true,
     },
     config,
   );
@@ -462,7 +464,7 @@ async function handleMessage(
       // Retry without resume — treat as new conversation
       resumeId = undefined;
       userMessagePersisted = false;
-      options = buildOptions(agentContext, { systemPrompt, cwd, agentEnv, toolFilter, onToolApproval, onToolResult, sandboxPolicy }, config);
+      options = buildOptions(agentContext, { systemPrompt, cwd, agentEnv, toolFilter, onToolApproval, onToolResult, sandboxPolicy, mcpConfigs: manifest.frontmatter.mcp, isRemoteSession: true }, config);
       q = sendMessage(msg.content, options);
     } else {
       throw err;

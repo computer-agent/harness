@@ -11,9 +11,9 @@ import type { AgentContext } from "./agent-context.js";
 import { createAgentRegistry } from "./agents/index.js";
 import type { HarnessConfig } from "./config.js";
 import type { Logger } from "./logger.js";
-import { type AgentManifest, loadAgentManifest } from "./manifest.js";
+import { type AgentManifest, type McpServerManifest, loadAgentManifest } from "./manifest.js";
 import type { RemoteSandboxPolicy } from "./sandbox.js";
-import { createAgentServers, type ToolFilter } from "./tools/index.js";
+import { createAgentServers, mergeExternalMcpServers, type ToolFilter } from "./tools/index.js";
 
 async function loadMemoryContext(contextFile: string): Promise<string | null> {
   try {
@@ -185,6 +185,8 @@ export function buildOptions(
     cwd?: string;
     agentEnv?: Record<string, string>;
     toolFilter?: ToolFilter;
+    mcpConfigs?: McpServerManifest[];
+    isRemoteSession?: boolean;
     onInstructionsLoaded?: (filePath: string, memoryType: string, loadReason: string) => void;
     onAskUserQuestion?: (input: Record<string, unknown>) => Promise<Record<string, string> | null>;
     onToolApproval?: (toolId: string, toolName: string, input: Record<string, unknown>) => Promise<boolean>;
@@ -198,6 +200,19 @@ export function buildOptions(
   const canUseTool = buildCanUseTool(ctx, config, opts.onAskUserQuestion, opts.onToolApproval, opts.sandboxPolicy, opts.logger);
   const cwd = opts.cwd ?? ctx.workspaceDir;
   const agentEnv = opts.agentEnv ?? {};
+
+  const harnessServers = createAgentServers(ctx, config, cwd, agentEnv, opts.toolFilter, opts.sandboxPolicy);
+  const mcpServers = opts.mcpConfigs?.length
+    ? mergeExternalMcpServers(
+        harnessServers,
+        opts.mcpConfigs,
+        `${ctx.name}-`,
+        agentEnv,
+        opts.isRemoteSession ?? false,
+        opts.sandboxPolicy,
+        opts.logger,
+      )
+    : harnessServers;
 
   return {
     model: config.model,
@@ -213,7 +228,7 @@ export function buildOptions(
       await mkdir(ctx.stateDir, { recursive: true });
       await appendFile(ctx.stderrLog, `${new Date().toISOString()} ${data}\n`);
     },
-    mcpServers: createAgentServers(ctx, config, cwd, agentEnv, opts.toolFilter, opts.sandboxPolicy),
+    mcpServers,
     strictMcpConfig: true,
     agents: createAgentRegistry(ctx.name),
     ...(hooks ? { hooks } : {}),
