@@ -2,10 +2,11 @@ import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentContext } from "../agent-context.js";
 import type { HarnessConfig } from "../config.js";
 import type { ToolDomain } from "../manifest.js";
+import type { RemoteSandboxPolicy } from "../sandbox.js";
 import { createIntrospectionTools } from "./introspection.js";
 import { createMemoryTools } from "./memory.js";
 import { modelQueryTools } from "./model-query.js";
-import { createShellTools } from "./shell.js";
+import { createSandboxedShellTools, createShellTools } from "./shell.js";
 import { createTaskTools } from "./tasks.js";
 import { createWebTools } from "./web.js";
 import { createWorkspaceTools } from "./workspace.js";
@@ -44,6 +45,7 @@ export function createAgentServers(
   cwd: string,
   agentEnv: Record<string, string> = {},
   toolFilter?: ToolFilter,
+  sandboxPolicy?: RemoteSandboxPolicy,
 ) {
   const prefix = `${ctx.name}-`;
   const servers: Record<string, ReturnType<typeof createSdkMcpServer>> = {};
@@ -64,7 +66,19 @@ export function createAgentServers(
     servers[`${prefix}workspace`] = createServer(`${prefix}workspace`, createWorkspaceTools(cwd));
   }
   if (isToolEnabled("shell", config, toolFilter)) {
-    servers[`${prefix}shell`] = createServer(`${prefix}shell`, createShellTools(cwd, agentEnv));
+    if (sandboxPolicy) {
+      // Remote mode: only create shell if policy allows, always sandboxed
+      if (sandboxPolicy.shell) {
+        servers[`${prefix}shell`] = createServer(
+          `${prefix}shell`,
+          createSandboxedShellTools(cwd, sandboxPolicy, agentEnv),
+        );
+      }
+      // If shell not allowed by policy, don't create the server at all (Layer 1 defense)
+    } else {
+      // CLI mode: unsandboxed shell
+      servers[`${prefix}shell`] = createServer(`${prefix}shell`, createShellTools(cwd, agentEnv));
+    }
   }
   if (isToolEnabled("models", config, toolFilter)) {
     servers[`${prefix}models`] = createServer(`${prefix}models`, modelQueryTools);

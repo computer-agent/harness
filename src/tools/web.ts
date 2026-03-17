@@ -1,4 +1,6 @@
+import { lookup } from "node:dns/promises";
 import { readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { join } from "node:path";
 import { query as sdkQuery, tool } from "@anthropic-ai/claude-agent-sdk";
 import { Readability } from "@mozilla/readability";
@@ -24,6 +26,31 @@ function createVirtualConsole(): VirtualConsole {
     console.error(err);
   });
   return vc;
+}
+
+const BLOCKED_RANGES = [
+  /^127\./,
+  /^10\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+  /^192\.168\./,
+  /^169\.254\./,
+  /^0\./,
+  /^::1$/,
+  /^fc/,
+  /^fd/,
+  /^fe80/,
+];
+
+async function validateUrl(url: string): Promise<void> {
+  const parsed = new URL(url);
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
+  if (hostname === "localhost" || hostname === "::1") {
+    throw new Error("Requests to localhost are not allowed");
+  }
+  const ip = isIP(hostname) ? hostname : (await lookup(hostname)).address;
+  if (BLOCKED_RANGES.some((r) => r.test(ip))) {
+    throw new Error("Requests to private/internal networks are not allowed");
+  }
 }
 
 async function extractRelevantContent(markdown: string, userQuery: string, model: string): Promise<string> {
@@ -110,6 +137,12 @@ export function createWebTools(webConfig?: { extraction_model?: string }, agentE
         ),
     },
     async ({ url, query }) => {
+      try {
+        await validateUrl(url);
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: err.message }] };
+      }
+
       const res = await fetch(url, {
         headers: {
           "User-Agent": `MastersOfAI-Harness/${PKG_VERSION}`,

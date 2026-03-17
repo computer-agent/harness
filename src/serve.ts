@@ -14,7 +14,7 @@ import {
   userCanAccessAgent,
 } from "./access.js";
 import { buildOptions, buildSystemPrompt, sendMessage } from "./agent.js";
-import { type AgentContext, listAgents, resolveAgent } from "./agent-context.js";
+import { type AgentContext, listAgents, resolveAgent, resolveRemoteAgent } from "./agent-context.js";
 import type { HarnessConfig } from "./config.js";
 import { loadAgentEnv } from "./env.js";
 import { classifyError } from "./errors.js";
@@ -30,6 +30,9 @@ import {
   touchSession,
 } from "./sessions.js";
 import type { WsAssistantMessage, WsClientMessage, WsToken, WsToolUseStart } from "./types/ws.js";
+import { Logger } from "./logger.js";
+import { RateLimiter } from "./rate-limit.js";
+import { REMOTE_SANDBOX_DEFAULTS, type RemoteSandboxPolicy } from "./sandbox.js";
 import { UsageTracker } from "./usage.js";
 
 const PKG_VERSION = (() => {
@@ -157,10 +160,13 @@ function registerHealthRoutes(app: FastifyInstance) {
   });
 }
 
-function registerAgentRoutes(app: FastifyInstance, opts: ServeOptions) {
+function registerAgentRoutes(app: FastifyInstance, opts: ServeOptions, logger: Logger) {
   app.get("/api/agents", async (request, reply) => {
     const user = authenticateRequest(request as any, opts.access);
-    if (!user) return reply.code(401).send({ error: "Invalid or missing token" });
+    if (!user) {
+      logger.warn("auth", "auth.failure", "REST auth failed: GET /api/agents");
+      return reply.code(401).send({ error: "Invalid or missing token" });
+    }
 
     const allAgents = await listAgents();
     const filtered = filterAgentsForUser(allAgents, user);
@@ -283,7 +289,7 @@ async function handleSubscribe(
     return null;
   }
 
-  const agentContext = resolveAgent(msg.agentId);
+  const agentContext = resolveRemoteAgent(msg.agentId, user.name);
   const sessionId = msg.sessionId ?? null;
 
   // Get or create a message buffer for this conversation
@@ -371,6 +377,13 @@ async function handleMessage(
     );
   };
 
+  // Enforce remote sandbox policy — unconditional for serve mode
+  const sandboxPolicy: RemoteSandboxPolicy = {
+    ...REMOTE_SANDBOX_DEFAULTS,
+    // Enable shell only if agent manifest allows it AND sandbox is enforced
+    shell: !!(manifest.frontmatter.sandbox?.enforce && toolFilter?.allow?.includes("shell")),
+  };
+
   let options = buildOptions(
     agentContext,
     {
@@ -381,6 +394,7 @@ async function handleMessage(
       toolFilter,
       onToolApproval,
       onToolResult,
+      sandboxPolicy,
     },
     config,
   );
@@ -415,7 +429,7 @@ async function handleMessage(
       // Retry without resume — treat as new conversation
       resumeId = undefined;
       userMessagePersisted = false;
-      options = buildOptions(agentContext, { systemPrompt, cwd, agentEnv, toolFilter, onToolApproval, onToolResult }, config);
+      options = buildOptions(agentContext, { systemPrompt, cwd, agentEnv, toolFilter, onToolApproval, onToolResult, sandboxPolicy }, config);
       q = sendMessage(msg.content, options);
     } else {
       throw err;
@@ -649,26 +663,73 @@ async function handleMessage(
   }
 }
 
-function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageTracker: UsageTracker) {
+function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageTracker: UsageTracker, logger: Logger, rateLimiter: RateLimiter) {
   app.register(async (fastify) => {
     fastify.get("/ws", { websocket: true }, (socket, request) => {
       const ws = socket as unknown as WebSocket;
       const connectionId = crypto.randomUUID();
 
+      const clientIp = request.ip ?? "unknown";
+
       // Auth: read token from query param or headers
       const token = extractWsToken(request);
       const user = token ? lookupUser(token, opts.access) : null;
       if (!user) {
+        // Rate limit auth failures per IP
+        if (!rateLimiter.checkAuthFailure(clientIp)) {
+          logger.warn("auth", "auth.failure", "Auth failure rate limited", {
+            details: { connectionId, ip: clientIp },
+          });
+          ws.close(4001, "Too many auth failures");
+          return;
+        }
+        logger.warn("auth", "auth.failure", "WebSocket auth failed", {
+          details: { connectionId },
+        });
         ws.send(JSON.stringify({ type: "error", code: "auth_failed", message: "Invalid token" }));
         ws.close(4001, "Unauthorized");
         return;
       }
 
+      // Connection limit per user
+      if (!rateLimiter.addConnection(user.name)) {
+        logger.warn("session", "session.created", "Connection limit exceeded", {
+          details: { userId: user.name, connectionId },
+        });
+        ws.send(JSON.stringify({ type: "error", code: "rate_limited", message: "Too many connections" }));
+        ws.close(4008, "Connection limit exceeded");
+        return;
+      }
+
+      logger.info("auth", "auth.success", `User authenticated: ${user.name}`, {
+        details: { userId: user.name, connectionId },
+      });
+
       ws.send(JSON.stringify({ type: "connected", connectionId }));
+
+      // Idle timeout — disconnect if no messages received
+      let idleTimer = setTimeout(() => {
+        logger.info("session", "session.ended", "WebSocket idle timeout", {
+          details: { userId: user.name, connectionId },
+        });
+        ws.close(4009, "Idle timeout");
+      }, rateLimiter.idleTimeoutMs);
 
       let activeConversation: ActiveConversation | null = null;
 
       ws.on("message", async (raw: Buffer) => {
+        // Reset idle timer on any message
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          ws.close(4009, "Idle timeout");
+        }, rateLimiter.idleTimeoutMs);
+
+        // Reject oversized messages
+        if (raw.length > 1024 * 1024) {
+          ws.send(JSON.stringify({ type: "error", code: "message_too_large", message: "Message exceeds 1MB" }));
+          return;
+        }
+
         let msg: WsClientMessage;
         try {
           msg = JSON.parse(raw.toString());
@@ -682,13 +743,34 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
             case "subscribe":
               activeConversation = await handleSubscribe(ws, msg, user);
               break;
-            case "message":
+            case "message": {
               if (!activeConversation) {
                 ws.send(JSON.stringify({ type: "error", code: "not_subscribed", message: "Subscribe first" }));
                 return;
               }
+              // Message length check
+              if (!rateLimiter.checkMessageLength(msg.content)) {
+                ws.send(JSON.stringify({
+                  type: "error",
+                  code: "message_too_large",
+                  message: "Message exceeds character limit",
+                }));
+                return;
+              }
+              // Per-user message rate limiting
+              const rateCheck = rateLimiter.checkMessageRate(user.name);
+              if (!rateCheck.allowed) {
+                ws.send(JSON.stringify({
+                  type: "error",
+                  code: "rate_limited",
+                  message: "Too many messages",
+                  retryAfter: rateCheck.retryAfter,
+                }));
+                return;
+              }
               await handleMessage(ws, msg, activeConversation, opts.config, usageTracker);
               break;
+            }
             case "ping":
               ws.send(JSON.stringify({ type: "pong" }));
               break;
@@ -725,6 +807,8 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
       });
 
       ws.on("close", () => {
+        clearTimeout(idleTimer);
+        rateLimiter.removeConnection(user.name);
         if (activeConversation?.activeQuery) {
           activeConversation.activeQuery = null;
         }
@@ -736,8 +820,13 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
 // ─── Server startup ───
 
 export async function startServer(opts: ServeOptions): Promise<void> {
-  const app = Fastify({ logger: true });
+  const app = Fastify({ logger: true, bodyLimit: 1024 * 1024 }); // 1MB body limit
   const usageTracker = new UsageTracker();
+  const rateLimiter = new RateLimiter(opts.config.serve?.rateLimits);
+  const logger = new Logger(opts.config.serve?.logging?.level ?? "info");
+  logger.info("server", "server.started", "Serve mode started", {
+    details: { port: opts.port, host: opts.host },
+  });
 
   // CORS: validate origins against an allowlist.
   // ALLOWED_ORIGINS env var: comma-separated list (e.g. "https://app.example.com,https://staging.example.com")
@@ -771,16 +860,17 @@ export async function startServer(opts: ServeOptions): Promise<void> {
   await app.register(fastifyWebsocket);
 
   registerHealthRoutes(app);
-  registerAgentRoutes(app, opts);
+  registerAgentRoutes(app, opts, logger);
   registerSessionRoutes(app, opts);
   registerUsageRoutes(app, opts, usageTracker);
-  registerWebSocketRoute(app, opts, usageTracker);
+  registerWebSocketRoute(app, opts, usageTracker, logger, rateLimiter);
 
   // Periodic sweep of stale message buffers
   const sweepTimer = setInterval(sweepStaleBuffers, SWEEP_INTERVAL_MS);
 
   // Clean shutdown
   const shutdown = async () => {
+    logger.info("server", "server.shutdown", "Serve mode shutting down");
     clearInterval(sweepTimer);
     await app.close();
     process.exit(0);

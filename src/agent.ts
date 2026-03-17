@@ -10,7 +10,9 @@ import {
 import type { AgentContext } from "./agent-context.js";
 import { createAgentRegistry } from "./agents/index.js";
 import type { HarnessConfig } from "./config.js";
+import type { Logger } from "./logger.js";
 import { type AgentManifest, loadAgentManifest } from "./manifest.js";
+import type { RemoteSandboxPolicy } from "./sandbox.js";
 import { createAgentServers, type ToolFilter } from "./tools/index.js";
 
 async function loadMemoryContext(contextFile: string): Promise<string | null> {
@@ -27,10 +29,11 @@ function buildHooks(
   config: HarnessConfig,
   onInstructionsLoaded?: (filePath: string, memoryType: string, loadReason: string) => void,
   onToolResult?: (toolId: string, toolName: string, output: string) => void,
+  logger?: Logger,
 ): Partial<Record<HookEvent, HookCallbackMatcher[]>> | undefined {
   const hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> = {};
 
-  if (config.hooks.logToolUse) {
+  if (config.hooks.logToolUse || logger) {
     const logDir = ctx.stateDir;
     const logPath = ctx.stderrLog;
 
@@ -39,14 +42,21 @@ function buildHooks(
         hooks: [
           async (input) => {
             if (input.hook_event_name === "PreToolUse") {
-              const ts = new Date().toISOString();
               const toolName = input.tool_name;
-              const toolInput =
-                typeof input.tool_input === "string"
-                  ? input.tool_input.slice(0, 200)
-                  : JSON.stringify(input.tool_input).slice(0, 200);
-              await mkdir(logDir, { recursive: true });
-              await appendFile(logPath, `${ts} [hook:PreToolUse] ${toolName} ${toolInput}\n`);
+              if (logger) {
+                logger.debug("tool", "tool.called", `Tool called: ${toolName}`, {
+                  details: { tool: toolName },
+                });
+              }
+              if (config.hooks.logToolUse) {
+                const ts = new Date().toISOString();
+                const toolInput =
+                  typeof input.tool_input === "string"
+                    ? input.tool_input.slice(0, 200)
+                    : JSON.stringify(input.tool_input).slice(0, 200);
+                await mkdir(logDir, { recursive: true });
+                await appendFile(logPath, `${ts} [hook:PreToolUse] ${toolName} ${toolInput}\n`);
+              }
             }
             return { continue: true };
           },
@@ -59,10 +69,17 @@ function buildHooks(
         hooks: [
           async (input) => {
             if (input.hook_event_name === "PostToolUse") {
-              const ts = new Date().toISOString();
               const toolName = input.tool_name;
-              await mkdir(logDir, { recursive: true });
-              await appendFile(logPath, `${ts} [hook:PostToolUse] ${toolName} complete\n`);
+              if (logger) {
+                logger.debug("tool", "tool.completed", `Tool completed: ${toolName}`, {
+                  details: { tool: toolName },
+                });
+              }
+              if (config.hooks.logToolUse) {
+                const ts = new Date().toISOString();
+                await mkdir(logDir, { recursive: true });
+                await appendFile(logPath, `${ts} [hook:PostToolUse] ${toolName} complete\n`);
+              }
             }
             return { continue: true };
           },
@@ -111,6 +128,8 @@ function buildCanUseTool(
   config: HarnessConfig,
   onAskUserQuestion?: (input: Record<string, unknown>) => Promise<Record<string, string> | null>,
   onToolApproval?: (toolId: string, toolName: string, input: Record<string, unknown>) => Promise<boolean>,
+  sandboxPolicy?: RemoteSandboxPolicy,
+  logger?: Logger,
 ): CanUseTool {
   return async (toolName, input, options) => {
     // Logging
@@ -119,6 +138,16 @@ function buildCanUseTool(
       const inputSummary = JSON.stringify(input).slice(0, 200);
       await mkdir(ctx.stateDir, { recursive: true });
       await appendFile(ctx.stderrLog, `${ts} [canUseTool] ${toolName} ${inputSummary}\n`);
+    }
+
+    // Layer 2: Remote sandbox policy — deny shell_exec if policy forbids it
+    if (sandboxPolicy && toolName === "shell_exec" && !sandboxPolicy.shell) {
+      if (logger) {
+        logger.warn("tool", "tool.denied", `Shell denied by sandbox policy: ${toolName}`, {
+          details: { tool: toolName },
+        });
+      }
+      return { behavior: "deny", message: "Shell execution is not allowed for this session" };
     }
 
     // AskUserQuestion handling
@@ -160,11 +189,13 @@ export function buildOptions(
     onAskUserQuestion?: (input: Record<string, unknown>) => Promise<Record<string, string> | null>;
     onToolApproval?: (toolId: string, toolName: string, input: Record<string, unknown>) => Promise<boolean>;
     onToolResult?: (toolId: string, toolName: string, output: string) => void;
+    logger?: Logger;
+    sandboxPolicy?: RemoteSandboxPolicy;
   },
   config: HarnessConfig,
 ): Options {
-  const hooks = buildHooks(ctx, config, opts.onInstructionsLoaded, opts.onToolResult);
-  const canUseTool = buildCanUseTool(ctx, config, opts.onAskUserQuestion, opts.onToolApproval);
+  const hooks = buildHooks(ctx, config, opts.onInstructionsLoaded, opts.onToolResult, opts.logger);
+  const canUseTool = buildCanUseTool(ctx, config, opts.onAskUserQuestion, opts.onToolApproval, opts.sandboxPolicy, opts.logger);
   const cwd = opts.cwd ?? ctx.workspaceDir;
   const agentEnv = opts.agentEnv ?? {};
 
@@ -182,7 +213,7 @@ export function buildOptions(
       await mkdir(ctx.stateDir, { recursive: true });
       await appendFile(ctx.stderrLog, `${new Date().toISOString()} ${data}\n`);
     },
-    mcpServers: createAgentServers(ctx, config, cwd, agentEnv, opts.toolFilter),
+    mcpServers: createAgentServers(ctx, config, cwd, agentEnv, opts.toolFilter, opts.sandboxPolicy),
     strictMcpConfig: true,
     agents: createAgentRegistry(ctx.name),
     ...(hooks ? { hooks } : {}),

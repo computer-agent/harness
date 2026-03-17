@@ -1,11 +1,28 @@
 import { execFile } from "node:child_process";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
 const exec = promisify(execFile);
+
+async function validateWorkspacePath(workspaceDir: string, userPath: string): Promise<string> {
+  const resolved = resolve(workspaceDir, userPath);
+  if (!resolved.startsWith(workspaceDir)) {
+    throw new Error("Path must be within workspace");
+  }
+  try {
+    const real = await realpath(resolved);
+    if (!real.startsWith(workspaceDir)) {
+      throw new Error("Path resolves outside workspace (symlink detected)");
+    }
+    return real;
+  } catch (err: any) {
+    if (err.code === "ENOENT") return resolved;
+    throw err;
+  }
+}
 
 export function createWorkspaceTools(workspaceDir: string) {
   const listFiles = tool(
@@ -16,16 +33,16 @@ export function createWorkspaceTools(workspaceDir: string) {
       include_files: z.boolean().optional().describe("Include files in listing, not just directories. Default: false"),
     },
     async ({ path, include_files = false }) => {
-      const target = path ? join(workspaceDir, path) : workspaceDir;
       try {
+        const target = path ? await validateWorkspacePath(workspaceDir, path) : workspaceDir;
         const entries = await readdir(target, { withFileTypes: true });
         const items = entries
           .filter((e) => !e.name.startsWith("."))
           .filter((e) => include_files || e.isDirectory())
           .map((e) => (e.isDirectory() ? `${e.name}/` : e.name));
         return { content: [{ type: "text" as const, text: items.join("\n") }] };
-      } catch {
-        return { content: [{ type: "text" as const, text: `Could not list '${target}'.` }] };
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: err?.message ?? `Could not list '${path}'.` }] };
       }
     },
     { annotations: { readOnlyHint: true } },
@@ -38,14 +55,14 @@ export function createWorkspaceTools(workspaceDir: string) {
       path: z.string().describe("Path relative to workspace root."),
     },
     async ({ path }) => {
-      const target = resolve(workspaceDir, path);
-      if (!target.startsWith(`${resolve(workspaceDir)}/`)) {
-        return { content: [{ type: "text" as const, text: "Path must be within workspace." }] };
-      }
       try {
+        const target = await validateWorkspacePath(workspaceDir, path);
         const text = await readFile(target, "utf-8");
         return { content: [{ type: "text" as const, text }] };
-      } catch {
+      } catch (err: any) {
+        if (err?.message?.includes("workspace") || err?.message?.includes("symlink")) {
+          return { content: [{ type: "text" as const, text: err.message }] };
+        }
         return { content: [{ type: "text" as const, text: `Could not read '${path}'.` }] };
       }
     },
@@ -60,15 +77,15 @@ export function createWorkspaceTools(workspaceDir: string) {
       content: z.string().describe("Full file content to write"),
     },
     async ({ path, content }) => {
-      const target = resolve(workspaceDir, path);
-      if (!target.startsWith(`${resolve(workspaceDir)}/`)) {
-        return { content: [{ type: "text" as const, text: "Error: path escapes workspace boundary." }] };
-      }
       try {
+        const target = await validateWorkspacePath(workspaceDir, path);
         await mkdir(dirname(target), { recursive: true });
         await writeFile(target, content, "utf-8");
         return { content: [{ type: "text" as const, text: `Written: ${path}` }] };
-      } catch (e) {
+      } catch (e: any) {
+        if (e?.message?.includes("workspace") || e?.message?.includes("symlink")) {
+          return { content: [{ type: "text" as const, text: e.message }] };
+        }
         return { content: [{ type: "text" as const, text: `Could not write '${path}': ${e}` }] };
       }
     },
@@ -83,9 +100,11 @@ export function createWorkspaceTools(workspaceDir: string) {
       new_str: z.string().describe("Replacement text"),
     },
     async ({ path, old_str, new_str }) => {
-      const target = resolve(workspaceDir, path);
-      if (!target.startsWith(`${resolve(workspaceDir)}/`)) {
-        return { content: [{ type: "text" as const, text: "Error: path escapes workspace boundary." }] };
+      let target: string;
+      try {
+        target = await validateWorkspacePath(workspaceDir, path);
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: err.message }] };
       }
       let content: string;
       try {
@@ -136,7 +155,12 @@ export function createWorkspaceTools(workspaceDir: string) {
       max_results: z.number().optional().describe("Max results to return. Default: 50"),
     },
     async ({ pattern, path, glob = false, type, max_results = 50 }) => {
-      const target = path ? join(workspaceDir, path) : workspaceDir;
+      let target: string;
+      try {
+        target = path ? await validateWorkspacePath(workspaceDir, path) : workspaceDir;
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: err.message }] };
+      }
       const args = [pattern, target, "--color", "never", "--max-results", String(max_results)];
       if (glob) args.push("--glob");
       if (type) args.push("--type", type);
@@ -182,7 +206,12 @@ export function createWorkspaceTools(workspaceDir: string) {
       max_results: z.number().optional().describe("Max matching lines. Default: 100"),
     },
     async ({ pattern, path, glob: fileGlob, ignore_case = false, context = 0, max_results = 100 }) => {
-      const target = path ? join(workspaceDir, path) : workspaceDir;
+      let target: string;
+      try {
+        target = path ? await validateWorkspacePath(workspaceDir, path) : workspaceDir;
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: err.message }] };
+      }
       const args = [pattern, target, "--color", "never", "--no-heading", "--line-number", "--max-count", "50"];
       if (fileGlob) args.push("--glob", fileGlob);
       if (ignore_case) args.push("--ignore-case");

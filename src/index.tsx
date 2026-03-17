@@ -182,7 +182,7 @@ if (getFlag("serve")) {
 
   const access = loadAccessConfig();
 
-  if (access.users.size === 0) {
+  if (access.users.length === 0) {
     console.error("Warning: No tokens defined in ~/.mastersof-ai/access.yaml");
     console.error("All API requests will be rejected. Create access.yaml to enable access.");
     console.error("");

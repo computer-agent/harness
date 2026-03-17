@@ -18,6 +18,24 @@ interface SandboxConfig {
   network?: "host" | "none";
 }
 
+/**
+ * Remote sandbox policy — applied to serve mode sessions.
+ * Shell is disabled by default; filesystem is restricted to workspace.
+ */
+export interface RemoteSandboxPolicy {
+  shell: boolean;
+  filesystem: "workspace";
+  network: boolean;
+  additionalMounts: SandboxMount[];
+}
+
+export const REMOTE_SANDBOX_DEFAULTS: RemoteSandboxPolicy = {
+  shell: false,
+  filesystem: "workspace",
+  network: true,
+  additionalMounts: [],
+};
+
 const ROOT_DIR = join(import.meta.dirname, "..");
 const HOME = process.env.HOME ?? "/root";
 
@@ -197,4 +215,80 @@ export function execInSandbox(
   } catch (err: any) {
     process.exit(err.status ?? 1);
   }
+}
+
+/**
+ * Build bwrap args for a single shell command in serve mode.
+ * Unlike execInSandbox (which re-execs the entire process), this wraps
+ * just the shell command — used by shell_exec in remote sessions.
+ */
+export function buildPerCommandBwrapArgs(
+  workspaceDir: string,
+  policy: RemoteSandboxPolicy,
+  agentEnv?: Record<string, string>,
+): string[] {
+  const home = HOME;
+  const args: string[] = [];
+
+  // System (read-only)
+  for (const dir of ["/usr", "/lib", "/lib64", "/bin", "/sbin"]) {
+    args.push(...roBind(dir));
+  }
+  for (const f of ["/etc/resolv.conf", "/etc/ssl", "/etc/ca-certificates", "/etc/passwd", "/etc/group", "/etc/localtime", "/etc/timezone"]) {
+    args.push(...roBind(f));
+  }
+
+  // Runtime tools (mise shims)
+  args.push(...roBind(join(home, ".local/share/mise/installs")));
+  args.push(...roBind(join(home, ".local/share/mise/shims")));
+  args.push(...roBind(join(home, ".gitconfig")));
+
+  // Workspace (read-write) — the only writable directory
+  args.push(...rwBind(workspaceDir));
+
+  // Additional mounts from policy
+  for (const mount of policy.additionalMounts) {
+    const mountPath = expandHome(mount.path);
+    if (mount.mode === "rw") {
+      args.push(...rwBind(mountPath));
+    } else {
+      args.push(...roBind(mountPath));
+    }
+  }
+
+  // Specials
+  args.push("--proc", "/proc");
+  args.push("--dev", "/dev");
+  args.push("--tmpfs", "/tmp");
+
+  // Namespaces
+  args.push("--unshare-pid", "--unshare-ipc");
+  if (!policy.network) {
+    args.push("--unshare-net");
+  }
+
+  args.push("--die-with-parent");
+  args.push("--chdir", workspaceDir);
+
+  // Environment
+  args.push("--clearenv");
+  args.push("--setenv", "HARNESS_SANDBOXED", "1");
+
+  const tz = process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (tz) args.push("--setenv", "TZ", tz);
+
+  for (const key of ["HOME", "PATH", "TERM"]) {
+    const val = process.env[key];
+    if (val !== undefined) args.push("--setenv", key, val);
+  }
+
+  // Inject agent env (excluding private keys)
+  if (agentEnv) {
+    for (const [key, val] of Object.entries(agentEnv)) {
+      if (key === "DOTENV_PRIVATE_KEY") continue;
+      args.push("--setenv", key, val);
+    }
+  }
+
+  return args;
 }

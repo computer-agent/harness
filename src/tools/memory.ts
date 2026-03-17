@@ -1,12 +1,23 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-function safePath(memoryDir: string, filename: string): string | null {
+async function validateMemoryPath(memoryDir: string, filename: string): Promise<string> {
   const resolved = resolve(memoryDir, filename);
-  if (!resolved.startsWith(`${resolve(memoryDir)}/`) && resolved !== resolve(memoryDir)) return null;
-  return resolved;
+  if (!resolved.startsWith(memoryDir)) {
+    throw new Error("Path must be within memory directory");
+  }
+  try {
+    const real = await realpath(resolved);
+    if (!real.startsWith(memoryDir)) {
+      throw new Error("Path resolves outside memory directory (symlink detected)");
+    }
+    return real;
+  } catch (err: any) {
+    if (err.code === "ENOENT") return resolved;
+    throw err;
+  }
 }
 
 export function createMemoryTools(memoryDir: string) {
@@ -15,14 +26,14 @@ export function createMemoryTools(memoryDir: string) {
     "Read a memory file from persistent memory. Use this to recall context from previous sessions — decisions made, strategies discussed, insights captured. Always check memory at the start of a conversation.",
     { filename: z.string().describe("Filename to read from memory directory, e.g. 'CONTEXT.md'") },
     async ({ filename }) => {
-      const filepath = safePath(memoryDir, filename);
-      if (!filepath) {
-        return { content: [{ type: "text" as const, text: "Error: filename must not escape memory directory." }] };
-      }
       try {
+        const filepath = await validateMemoryPath(memoryDir, filename);
         const content = await readFile(filepath, "utf-8");
         return { content: [{ type: "text" as const, text: content }] };
-      } catch {
+      } catch (err: any) {
+        if (err?.message?.includes("memory directory") || err?.message?.includes("symlink")) {
+          return { content: [{ type: "text" as const, text: err.message }] };
+        }
         return { content: [{ type: "text" as const, text: `Memory file '${filename}' not found.` }] };
       }
     },
@@ -37,13 +48,14 @@ export function createMemoryTools(memoryDir: string) {
       content: z.string().describe("Full content to write to the file"),
     },
     async ({ filename, content }) => {
-      await mkdir(memoryDir, { recursive: true });
-      const filepath = safePath(memoryDir, filename);
-      if (!filepath) {
-        return { content: [{ type: "text" as const, text: "Error: filename must not escape memory directory." }] };
+      try {
+        await mkdir(memoryDir, { recursive: true });
+        const filepath = await validateMemoryPath(memoryDir, filename);
+        await writeFile(filepath, content, "utf-8");
+        return { content: [{ type: "text" as const, text: `Memory file '${filename}' written successfully.` }] };
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: err.message }] };
       }
-      await writeFile(filepath, content, "utf-8");
-      return { content: [{ type: "text" as const, text: `Memory file '${filename}' written successfully.` }] };
     },
   );
 
@@ -56,9 +68,11 @@ export function createMemoryTools(memoryDir: string) {
       new_str: z.string().describe("Replacement text"),
     },
     async ({ filename, old_str, new_str }) => {
-      const filepath = safePath(memoryDir, filename);
-      if (!filepath) {
-        return { content: [{ type: "text" as const, text: "Error: filename must not escape memory directory." }] };
+      let filepath: string;
+      try {
+        filepath = await validateMemoryPath(memoryDir, filename);
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: err.message }] };
       }
       let content: string;
       try {
@@ -101,9 +115,11 @@ export function createMemoryTools(memoryDir: string) {
       text: z.string().describe("Text to insert"),
     },
     async ({ filename, line, text }) => {
-      const filepath = safePath(memoryDir, filename);
-      if (!filepath) {
-        return { content: [{ type: "text" as const, text: "Error: filename must not escape memory directory." }] };
+      let filepath: string;
+      try {
+        filepath = await validateMemoryPath(memoryDir, filename);
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: err.message }] };
       }
       let content: string;
       try {

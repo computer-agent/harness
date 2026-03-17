@@ -19,6 +19,19 @@ export interface HarnessConfig {
     logToolUse: boolean;
   };
   effort: "low" | "medium" | "high" | "max";
+  serve?: {
+    logging?: {
+      level?: "debug" | "info" | "warn" | "error";
+    };
+    rateLimits?: {
+      messagesPerMinute?: number;
+      concurrentSessions?: number;
+      wsConnectionsPerUser?: number;
+      maxMessageLength?: number;
+      authFailuresPerMinute?: number;
+      wsIdleTimeoutMs?: number;
+    };
+  };
 }
 
 const DEFAULTS: HarnessConfig = {
@@ -37,6 +50,11 @@ const DEFAULTS: HarnessConfig = {
     logToolUse: false,
   },
   effort: "max",
+  serve: {
+    logging: {
+      level: "info",
+    },
+  },
 };
 
 export function getHomeDir(): string {
