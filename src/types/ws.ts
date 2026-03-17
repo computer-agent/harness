@@ -169,6 +169,18 @@ export interface WsBudgetExceeded {
   resetsAt?: string;
 }
 
+export interface WsRosterUpdated {
+  type: "roster_updated";
+  agents: Array<{
+    id: string;
+    name: string;
+    description: string;
+    icon?: string;
+    tags: string[];
+    starters: string[];
+  }>;
+}
+
 export type WsServerMessage =
   | WsConnected
   | WsSubscribed
@@ -188,4 +200,5 @@ export type WsServerMessage =
   | WsToolApprovalRequest
   | WsReplay
   | WsBudgetWarning
-  | WsBudgetExceeded;
+  | WsBudgetExceeded
+  | WsRosterUpdated;

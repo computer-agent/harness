@@ -26,7 +26,7 @@ interface SlidingWindowEntry {
 }
 
 export class RateLimiter {
-  private readonly config: RateLimitConfig;
+  private config: RateLimitConfig;
   private readonly messageWindows = new Map<string, SlidingWindowEntry>();
   private readonly authFailureWindows = new Map<string, SlidingWindowEntry>();
   private readonly activeSessions = new Map<string, Set<string>>(); // userId → sessionIds
@@ -132,6 +132,13 @@ export class RateLimiter {
 
     entry.timestamps.push(now);
     return true;
+  }
+
+  /** Update rate limit configuration at runtime (e.g., after config hot reload). */
+  updateLimits(newLimits?: Partial<RateLimitConfig>): void {
+    if (newLimits) {
+      this.config = { ...this.config, ...newLimits };
+    }
   }
 
   /** Get idle timeout in ms. */

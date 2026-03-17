@@ -10,13 +10,14 @@ import {
   type AccessUser,
   authenticateRequest,
   filterAgentsForUser,
+  loadAccessConfig,
   lookupUser,
   userCanAccessAgent,
 } from "./access.js";
 import { buildOptions, buildSystemPrompt, sendMessage } from "./agent.js";
 import { CostTracker } from "./cost.js";
-import { type AgentContext, listAgents, resolveAgent, resolveRemoteAgent } from "./agent-context.js";
-import type { HarnessConfig } from "./config.js";
+import { type AgentContext, getAgentsDir, listAgents, resolveAgent, resolveRemoteAgent } from "./agent-context.js";
+import { type HarnessConfig, getConfigPath, getHomeDir, loadConfig } from "./config.js";
 import { loadAgentEnv } from "./env.js";
 import { classifyError } from "./errors.js";
 import type { AgentManifest } from "./manifest.js";
@@ -35,6 +36,8 @@ import { Logger } from "./logger.js";
 import { RateLimiter } from "./rate-limit.js";
 import { REMOTE_SANDBOX_DEFAULTS, type RemoteSandboxPolicy } from "./sandbox.js";
 import { UsageTracker } from "./usage.js";
+import { HealthMonitor } from "./health.js";
+import { FileWatcher } from "./watcher.js";
 
 const PKG_VERSION = (() => {
   try {
@@ -51,6 +54,11 @@ export interface ServeOptions {
   config: HarnessConfig;
   access: AccessConfig;
 }
+
+// ─── Health tracking counters ───
+
+let activeSessionCount = 0;
+let activeConnectionCount = 0;
 
 // ─── Active conversation state ───
 
@@ -153,11 +161,46 @@ function extractWsToken(request: FastifyRequest): string | null {
   return null;
 }
 
+// ─── Connected WebSocket clients (for broadcasting) ───
+
+const connectedClients = new Map<WebSocket, { user: AccessUser; token: string }>();
+
+function broadcastToAll(message: object): void {
+  const payload = JSON.stringify(message);
+  for (const [ws] of connectedClients) {
+    try {
+      ws.send(payload);
+    } catch {
+      // Connection already closed
+    }
+  }
+}
+
 // ─── Route registration ───
 
-function registerHealthRoutes(app: FastifyInstance) {
-  app.get("/health", async () => {
-    return { status: "ok", version: PKG_VERSION, uptime: process.uptime() };
+function registerHealthRoutes(
+  app: FastifyInstance,
+  opts: ServeOptions,
+  healthMonitor: HealthMonitor,
+  logger: Logger,
+) {
+  // Shallow health — no auth, fast
+  app.get("/health", async (_request, reply) => {
+    const health = healthMonitor.shallowCheck();
+    if (health.status === "shutting_down") {
+      return reply.code(503).send(health);
+    }
+    return health;
+  });
+
+  // Deep health — admin auth required, cached 30s
+  app.get("/health/deep", async (request, reply) => {
+    const user = authenticateRequest(request as any, opts.access);
+    if (!user) return reply.code(401).send({ error: "Invalid or missing token" });
+    if (user.agents !== "*") return reply.code(403).send({ error: "Admin access required" });
+
+    const health = await healthMonitor.deepCheck();
+    return health;
   });
 }
 
@@ -758,6 +801,11 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
         details: { userId: user.name, connectionId },
       });
 
+      activeConnectionCount++;
+
+      // Track connected client for broadcasting and token revocation
+      connectedClients.set(ws, { user, token: token! });
+
       ws.send(JSON.stringify({ type: "connected", connectionId }));
 
       // Idle timeout — disconnect if no messages received
@@ -793,9 +841,14 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
 
         try {
           switch (msg.type) {
-            case "subscribe":
+            case "subscribe": {
+              const prev = activeConversation;
               activeConversation = await handleSubscribe(ws, msg, user);
+              if (activeConversation && !prev) {
+                activeSessionCount++;
+              }
               break;
+            }
             case "message": {
               if (!activeConversation) {
                 ws.send(JSON.stringify({ type: "error", code: "not_subscribed", message: "Subscribe first" }));
@@ -875,6 +928,11 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
 
       ws.on("close", () => {
         clearTimeout(idleTimer);
+        activeConnectionCount--;
+        connectedClients.delete(ws);
+        if (activeConversation) {
+          activeSessionCount--;
+        }
         rateLimiter.removeConnection(user.name);
         if (activeConversation?.activeQuery) {
           activeConversation.activeQuery = null;
@@ -935,20 +993,124 @@ export async function startServer(opts: ServeOptions): Promise<void> {
   });
   await app.register(fastifyWebsocket);
 
-  registerHealthRoutes(app);
+  // Health monitoring
+  const healthMonitor = new HealthMonitor(
+    PKG_VERSION,
+    () => activeSessionCount,
+    () => activeConnectionCount,
+    logger,
+  );
+
+  // Track error/success rates via Fastify response hook
+  app.addHook("onResponse", (_request, reply, done) => {
+    if (reply.statusCode >= 400) {
+      healthMonitor.recordError();
+    } else {
+      healthMonitor.recordSuccess();
+    }
+    done();
+  });
+
+  registerHealthRoutes(app, opts, healthMonitor, logger);
   registerAgentRoutes(app, opts, logger);
   registerSessionRoutes(app, opts);
   registerUsageRoutes(app, opts, usageTracker, costTracker);
   registerAdminRoutes(app, opts, costTracker, logger);
   registerWebSocketRoute(app, opts, usageTracker, logger, rateLimiter, costTracker);
 
+  // ─── File watcher for hot reload ───
+
+  const homeDir = getHomeDir();
+  const agentsDir = getAgentsDir();
+  const configPath = getConfigPath();
+  const accessPath = join(homeDir, "access.yaml");
+
+  const watcher = new FileWatcher(
+    agentsDir,
+    configPath,
+    accessPath,
+    {
+      onRosterChange: async () => {
+        try {
+          const allAgents = await listAgents();
+          const rosterPayload = allAgents.map(agentToApiResponse);
+          broadcastToAll({ type: "roster_updated", agents: rosterPayload });
+          logger.info("agent", "roster.reloaded", `Roster reloaded: ${allAgents.length} agents`);
+        } catch (err) {
+          logger.error("agent", "roster.reload_failed", `Failed to reload roster: ${err}`);
+        }
+      },
+      onConfigChange: async () => {
+        try {
+          opts.config = loadConfig();
+          rateLimiter.updateLimits(opts.config.serve?.rateLimits);
+          logger.info("server", "config.reloaded", "Config reloaded");
+        } catch (err) {
+          logger.error("server", "config.reload_failed", `Failed to reload config: ${err}`);
+        }
+      },
+      onAccessChange: async () => {
+        try {
+          opts.access = loadAccessConfig();
+          // Sync budgets from updated access config
+          for (const entry of opts.access.users) {
+            costTracker.setBudget(entry.name, entry.budget);
+          }
+          // Disconnect revoked tokens
+          for (const [ws, clientInfo] of connectedClients) {
+            const user = lookupUser(clientInfo.token, opts.access);
+            if (!user) {
+              try {
+                ws.send(JSON.stringify({ type: "error", code: "token_revoked", message: "Your access has been revoked" }));
+                ws.close(4003, "Token revoked");
+              } catch {
+                // Already closed
+              }
+            }
+          }
+          logger.info("auth", "access.reloaded", "Access control reloaded");
+        } catch (err) {
+          logger.error("auth", "access.reload_failed", `Failed to reload access: ${err}`);
+        }
+      },
+    },
+    logger,
+  );
+  await watcher.start();
+
+  // ─── Admin reload endpoint (manual trigger) ───
+
+  app.post("/api/admin/reload", async (request, reply) => {
+    const user = authenticateRequest(request as any, opts.access);
+    if (!user) return reply.code(401).send({ error: "Invalid or missing token" });
+    if (user.agents !== "*") return reply.code(403).send({ error: "Admin access required" });
+
+    try {
+      opts.config = loadConfig();
+      rateLimiter.updateLimits(opts.config.serve?.rateLimits);
+      opts.access = loadAccessConfig();
+      for (const entry of opts.access.users) {
+        costTracker.setBudget(entry.name, entry.budget);
+      }
+      const allAgents = await listAgents();
+      broadcastToAll({ type: "roster_updated", agents: allAgents.map(agentToApiResponse) });
+      logger.info("server", "admin.reload", "Manual reload completed");
+      return { reloaded: true, agents: allAgents.length };
+    } catch (err) {
+      logger.error("server", "admin.reload_failed", `Manual reload failed: ${err}`);
+      return reply.code(500).send({ error: "Reload failed" });
+    }
+  });
+
   // Periodic sweep of stale message buffers
   const sweepTimer = setInterval(sweepStaleBuffers, SWEEP_INTERVAL_MS);
 
   // Clean shutdown
   const shutdown = async () => {
+    healthMonitor.setShuttingDown();
     logger.info("server", "server.shutdown", "Serve mode shutting down");
     clearInterval(sweepTimer);
+    watcher.stop();
     costTracker.stopPersistence();
     await costTracker.persist();
     await app.close();
