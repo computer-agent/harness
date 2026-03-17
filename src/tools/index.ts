@@ -10,6 +10,8 @@ import { modelQueryTools } from "./model-query.js";
 import { createSandboxedShellTools, createShellTools } from "./shell.js";
 import { createTaskTools } from "./tasks.js";
 import { createWebTools } from "./web.js";
+import { createA2ATools } from "./a2a.js";
+import { createScratchpadTools } from "./scratchpad.js";
 import { createWorkspaceTools } from "./workspace.js";
 
 export interface ToolFilter {
@@ -39,6 +41,14 @@ export function isToolEnabled(domain: ToolDomain, config: HarnessConfig, filter?
 
 const createServer = (name: string, tools: Parameters<typeof createSdkMcpServer>[0]["tools"]) =>
   createSdkMcpServer({ name, tools });
+
+/**
+ * Build an MCP tool name from its components.
+ * Centralizes the `mcp__<agent>-<server>__<tool>` naming convention.
+ */
+export function mcpTool(agentName: string, server: string, tool: string): string {
+  return `mcp__${agentName}-${server}__${tool}`;
+}
 
 export function createAgentServers(
   ctx: AgentContext,
@@ -86,6 +96,15 @@ export function createAgentServers(
   }
   if (isToolEnabled("tasks", config, toolFilter)) {
     servers[`${prefix}tasks`] = createServer(`${prefix}tasks`, createTaskTools(ctx.memoryDir));
+  }
+  if (config.tools.a2a.enabled) {
+    servers[`${prefix}a2a`] = createServer(`${prefix}a2a`, createA2ATools(config.tools.a2a.agents));
+  }
+  if (config.tools.scratchpad.enabled) {
+    servers[`${prefix}scratchpad`] = createServer(
+      `${prefix}scratchpad`,
+      createScratchpadTools(ctx.workspaceDir),
+    );
   }
 
   return servers;

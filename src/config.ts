@@ -3,6 +3,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
 
+export interface A2AAgentEntry {
+  url: string;
+  description: string;
+}
+
 export interface HarnessConfig {
   model: string;
   defaultAgent: string;
@@ -14,9 +19,16 @@ export interface HarnessConfig {
     tasks: { enabled: boolean };
     introspection: { enabled: boolean };
     models: { enabled: boolean };
+    scratchpad: { enabled: boolean };
+    a2a: { enabled: boolean; agents: Record<string, A2AAgentEntry> };
   };
   hooks: {
     logToolUse: boolean;
+    verifyBeforeComplete: boolean;
+    loopDetection: boolean;
+    loopDetectionThreshold: number;
+    compactSuccessOutput: boolean;
+    compactOutputThreshold: number;
   };
   effort: "low" | "medium" | "high" | "max";
   serve?: {
@@ -51,9 +63,16 @@ const DEFAULTS: HarnessConfig = {
     tasks: { enabled: true },
     introspection: { enabled: true },
     models: { enabled: true },
+    scratchpad: { enabled: true },
+    a2a: { enabled: true, agents: {} },
   },
   hooks: {
     logToolUse: false,
+    verifyBeforeComplete: true,
+    loopDetection: true,
+    loopDetectionThreshold: 3,
+    compactSuccessOutput: true,
+    compactOutputThreshold: 50,
   },
   effort: "max",
   serve: {
@@ -80,7 +99,8 @@ export function getConfigPath(): string {
 function deepMerge(target: any, source: any): any {
   const result = { ...target };
   for (const key of Object.keys(source)) {
-    if (source[key] && typeof source[key] === "object" && !Array.isArray(source[key])) {
+    if (source[key] === null || source[key] === undefined) continue;
+    if (typeof source[key] === "object" && !Array.isArray(source[key])) {
       result[key] = deepMerge(target[key] ?? {}, source[key]);
     } else {
       result[key] = source[key];
@@ -131,9 +151,26 @@ tools:
     enabled: true
   models:
     enabled: true
+  scratchpad:
+    enabled: true
+  a2a:
+    enabled: true
+    agents: {}
+    # Registered remote A2A agents (name → url + description):
+    #   data-pipeline:
+    #     url: http://data-agent.internal:4000
+    #     description: "LangGraph data pipeline agent"
 
 # Hooks — lifecycle callbacks for the agent SDK
 hooks:
   # Log every tool call to stderr log (tool name, inputs, timing)
   logToolUse: false
+  # Remind agent to verify file changes before completing a task
+  verifyBeforeComplete: true
+  # Detect and warn about repeated edits to the same file
+  loopDetection: true
+  loopDetectionThreshold: 3
+  # Truncate long successful command output, preserve full failure output
+  compactSuccessOutput: true
+  compactOutputThreshold: 50
 `;

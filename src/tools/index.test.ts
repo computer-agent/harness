@@ -15,8 +15,17 @@ const allEnabledConfig: HarnessConfig = {
     tasks: { enabled: true },
     introspection: { enabled: true },
     models: { enabled: true },
+    scratchpad: { enabled: true },
+    a2a: { enabled: true, agents: {} },
   },
-  hooks: { logToolUse: false },
+  hooks: {
+    logToolUse: false,
+    verifyBeforeComplete: true,
+    loopDetection: true,
+    loopDetectionThreshold: 3,
+    compactSuccessOutput: true,
+    compactOutputThreshold: 50,
+  },
   effort: "high",
 };
 

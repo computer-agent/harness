@@ -404,14 +404,14 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
       isStreamingRef.current = true;
 
       try {
-        const { systemPrompt, manifest } = await buildSystemPrompt(agentContext);
-        const toolFilter = manifest.frontmatter.tools ?? undefined;
         const loadedInstructions: string[] = [];
         const effectiveConfig = {
           ...config,
           ...(state.effortOverride ? { effort: state.effortOverride } : {}),
           ...(state.modelOverride ? { model: state.modelOverride } : {}),
         };
+        const { systemPrompt, manifest } = await buildSystemPrompt(agentContext, effectiveConfig);
+        const toolFilter = manifest.frontmatter.tools ?? undefined;
         const options = buildOptions(
           agentContext,
           {

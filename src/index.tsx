@@ -171,6 +171,30 @@ if (!hasApiKey && hasCredentials) {
   }
 }
 
+// --- Flag: --card (output Agent Card JSON and exit) ---
+
+if (getFlag("card")) {
+  const agentName = getFlagValue("agent") ?? config.defaultAgent ?? DEFAULT_AGENT;
+  let agentContext: ReturnType<typeof resolveAgent>;
+  try {
+    agentContext = resolveAgent(agentName);
+  } catch (err) {
+    if (err instanceof AgentNotFoundError) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    throw err;
+  }
+
+  const { buildAgentCard } = await import("./a2a/agent-card.js");
+  const { loadIdentity } = await import("./prompt.js");
+  const identity = await loadIdentity(agentContext.identityPath);
+  const port = Number(getFlagValue("port")) || 4000;
+  const card = buildAgentCard(agentContext.name, identity, { port });
+  console.log(JSON.stringify(card, null, 2));
+  process.exit(0);
+}
+
 // --- Flag: --serve (server mode) ---
 
 if (getFlag("serve")) {
@@ -251,7 +275,7 @@ if (getFlag("serve")) {
     }
 
     try {
-      const { systemPrompt, manifest } = await buildSystemPrompt(agentContext);
+      const { systemPrompt, manifest } = await buildSystemPrompt(agentContext, config);
       const toolFilter = manifest.frontmatter.tools ?? undefined;
       const options = buildOptions(
         agentContext,

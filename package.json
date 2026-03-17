@@ -46,12 +46,15 @@
     "check:all": "biome check && tsc --noEmit && cd web && tsc -b && cd .. && npx knip"
   },
   "dependencies": {
+    "@a2a-js/sdk": "^0.3.13",
     "@anthropic-ai/claude-agent-sdk": "^0.2.76",
     "@dotenvx/dotenvx": "^1.52.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/websocket": "^11.2.0",
     "@mozilla/readability": "^0.6.0",
+    "@types/express": "^5.0.6",
     "archiver": "^7.0.1",
+    "express": "^5.2.1",
     "fastify": "^5.8.2",
     "ink": "^6.8.0",
     "jsdom": "^28.1.0",
