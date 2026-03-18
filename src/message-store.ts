@@ -1,5 +1,6 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { validateSessionId } from "./path-safety.js";
 import type { SessionDirs } from "./sessions.js";
 
 export interface PersistedMessage {
@@ -10,6 +11,7 @@ export interface PersistedMessage {
 }
 
 function messagesPath(dirs: SessionDirs, sessionId: string): string {
+  validateSessionId(sessionId);
   return join(dirs.sessionsDir, sessionId, "messages.jsonl");
 }
 

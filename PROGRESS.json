@@ -1,99 +1,36 @@
 {
-  "task": "Code quality, tooling, port change, and CI setup",
+  "task": "Fix CodeQL security alerts",
   "created": "2026-03-17",
   "updatedAt": "2026-03-17",
   "status": "complete",
   "items": [
     {
-      "name": "Fix Biome failures",
+      "name": "Path injection: add validation module",
       "status": "completed",
       "files": [
-        "biome.json",
-        "src/serve.ts",
-        "src/message-store.ts",
-        "src/components/App.tsx",
-        "web/vite.config.ts",
-        "src/watcher.ts",
-        "src/tools/a2a.ts",
-        "tests/test-ember-flow.mjs"
-      ],
-      "validation": ["`npx biome check` exits 0 ✓", "83/83 unit tests pass ✓"]
-    },
-    {
-      "name": "Fix web TypeScript failures",
-      "status": "completed",
-      "files": ["web/tsconfig.app.json", "web/src/vite-env.d.ts"],
-      "validation": ["`cd web && npx tsc -b` exits 0 ✓"]
-    },
-    {
-      "name": "Enable noUncheckedIndexedAccess",
-      "status": "completed",
-      "files": [
-        "tsconfig.json",
-        "src/components/MultilineInput.tsx",
-        "src/components/App.tsx",
-        "src/components/QuestionSelector.tsx",
-        "src/cost.ts",
-        "src/index.tsx",
-        "src/rate-limit.ts",
+        "src/path-safety.ts",
         "src/sessions.ts",
-        "src/tools/memory.ts",
-        "src/tools/workspace.ts",
-        "src/types/ask-user.test.ts",
-        "src/integration.test.ts",
-        "src/manifest.test.ts"
-      ],
-      "validation": ["tsconfig.json has noUncheckedIndexedAccess: true ✓", "`npx tsc --noEmit` exits 0 ✓"]
-    },
-    {
-      "name": "Change default port to 3100",
-      "status": "completed",
-      "files": [
-        "src/index.tsx",
-        "web/vite.config.ts",
-        "tests/test-integration.sh",
-        "tests/test-ws.mjs",
-        "tests/test-isolation.mjs",
-        "tests/test-ember-flow.mjs",
-        "tests/test-ember-tools.mjs"
+        "src/message-store.ts",
+        "src/agent-context.ts",
+        "src/privacy.ts"
       ],
       "validation": [
-        "No runtime port 3000 references in src/tests/web ✓",
-        "Vite proxy targets 3100 ✓",
-        "Test scripts target 3100 ✓"
+        "All path construction uses validated inputs ✓",
+        "`npx tsc --noEmit` exits 0 ✓",
+        "83/83 tests pass ✓"
       ]
     },
     {
-      "name": "Add .editorconfig",
+      "name": "Missing rate limiting: add @fastify/rate-limit",
       "status": "completed",
-      "files": [".editorconfig"],
-      "validation": [".editorconfig exists with indent/line-ending settings matching biome.json ✓"]
+      "files": ["src/serve.ts", "package.json"],
+      "validation": ["All HTTP routes rate-limited via @fastify/rate-limit plugin ✓", "`npx tsc --noEmit` exits 0 ✓"]
     },
     {
-      "name": "Add Lefthook pre-commit hooks",
+      "name": "Incomplete sanitization: fix tag stripping",
       "status": "completed",
-      "files": ["lefthook.yml", "package.json"],
-      "validation": [
-        "lefthook.yml with pre-commit lint + typecheck ✓",
-        "lefthook installed as devDependency ✓",
-        "Git hooks installed ✓"
-      ]
-    },
-    {
-      "name": "Add GitHub Actions CI workflow",
-      "status": "completed",
-      "files": [".github/workflows/ci.yml", "README.md"],
-      "validation": [
-        "Workflow file exists ✓",
-        "Runs biome check + tsc + knip + tests on push/PR ✓",
-        "CI badge added to README.md ✓"
-      ]
-    },
-    {
-      "name": "Clean up stale eslint-disable comments",
-      "status": "completed",
-      "files": ["web/src/hooks/useAuth.ts", "web/src/hooks/useAgentChat.ts"],
-      "validation": ["No eslint-disable comments remain ✓"]
+      "files": ["src/sessions.ts"],
+      "validation": ["Tag stripping loops until no tags remain ✓"]
     }
   ]
 }

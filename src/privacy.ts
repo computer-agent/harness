@@ -5,6 +5,7 @@ import { pipeline } from "node:stream/promises";
 import archiver from "archiver";
 import { getHomeDir } from "./config.js";
 import type { Logger } from "./logger.js";
+import { validateName, validatePathSegment } from "./path-safety.js";
 
 export interface PrivacyConfig {
   sessionRetentionDays: number;
@@ -47,6 +48,7 @@ interface CleanupReport {
 // ─── Consent ───
 
 export async function checkConsent(userId: string, policyVersion: string): Promise<boolean> {
+  validateName(userId, "user ID");
   const consentPath = join(getHomeDir(), "state", "consent", `${userId}.json`);
   try {
     const raw = await readFile(consentPath, "utf-8");
@@ -58,6 +60,7 @@ export async function checkConsent(userId: string, policyVersion: string): Promi
 }
 
 export async function recordConsent(userId: string, policyVersion: string): Promise<void> {
+  validateName(userId, "user ID");
   const consentDir = join(getHomeDir(), "state", "consent");
   await mkdir(consentDir, { recursive: true });
   const record: ConsentRecord = {
@@ -71,6 +74,7 @@ export async function recordConsent(userId: string, policyVersion: string): Prom
 // ─── Data Export ───
 
 export async function exportUserData(userId: string): Promise<Buffer> {
+  validateName(userId, "user ID");
   const homeDir = getHomeDir();
   const agentsDir = join(homeDir, "agents");
   const chunks: Buffer[] = [];
@@ -103,6 +107,7 @@ export async function exportUserData(userId: string): Promise<Buffer> {
   try {
     const agents = await readdir(agentsDir);
     for (const agentId of agents) {
+      validatePathSegment(agentId, "agent directory name");
       // Sessions
       const sessionsDir = join(homeDir, "state", agentId, "sessions", userId);
       await addDirectoryToArchive(archive, sessionsDir, `export-${userId}/agents/${agentId}/sessions`);
@@ -165,6 +170,7 @@ async function addDirectoryToArchive(archive: archiver.Archiver, dirPath: string
 // ─── Data Deletion ───
 
 export async function deleteUserData(userId: string): Promise<DeletionReport> {
+  validateName(userId, "user ID");
   const homeDir = getHomeDir();
   const agentsDir = join(homeDir, "agents");
   const report: DeletionReport = {

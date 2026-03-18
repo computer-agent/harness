@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import fastifyCors from "@fastify/cors";
+import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
@@ -1123,6 +1124,22 @@ export async function startServer(opts: ServeOptions): Promise<void> {
     allowedHeaders: ["Content-Type", "Authorization"],
   });
   await app.register(fastifyWebsocket);
+
+  // Rate limiting for HTTP routes (WebSocket has its own rate limiter)
+  await app.register(fastifyRateLimit, {
+    max: 100,
+    timeWindow: "1 minute",
+    keyGenerator: (request) => {
+      // Use auth token or IP as the rate limit key
+      const authHeader = request.headers.authorization;
+      if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
+      return request.ip ?? "unknown";
+    },
+    allowList: (request) => {
+      // Don't rate-limit health checks
+      return request.url === "/health" || request.url === "/health/deep";
+    },
+  });
 
   // Health monitoring
   const healthMonitor = new HealthMonitor(

@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { validateSessionId } from "./path-safety.js";
 
 export interface SessionDirs {
   sessionsDir: string;
@@ -16,6 +17,7 @@ export interface SessionMeta {
 // --- CRUD ---
 
 export async function saveSession(dirs: SessionDirs, meta: SessionMeta): Promise<void> {
+  validateSessionId(meta.id);
   await mkdir(dirs.sessionsDir, { recursive: true });
   await writeFile(join(dirs.sessionsDir, `${meta.id}.json`), JSON.stringify(meta, null, 2), "utf-8");
   await writeFile(dirs.lastSessionFile, meta.id, "utf-8");
@@ -23,6 +25,7 @@ export async function saveSession(dirs: SessionDirs, meta: SessionMeta): Promise
 
 export async function loadSession(dirs: SessionDirs, id: string): Promise<SessionMeta | null> {
   try {
+    validateSessionId(id);
     const raw = await readFile(join(dirs.sessionsDir, `${id}.json`), "utf-8");
     return JSON.parse(raw);
   } catch {
@@ -52,6 +55,7 @@ export async function listSessions(dirs: SessionDirs): Promise<SessionMeta[]> {
 
 export async function deleteSession(dirs: SessionDirs, id: string): Promise<boolean> {
   try {
+    validateSessionId(id);
     await unlink(join(dirs.sessionsDir, `${id}.json`));
     return true;
   } catch {
@@ -87,7 +91,14 @@ export async function getLastSessionId(dirs: SessionDirs): Promise<string | null
 
 function nameFromMessage(msg: string): string {
   // Strip XML tags (SDK wraps commands in tags)
-  const stripped = msg.replace(/<[^>]+>/g, "").trim();
+  let stripped = msg;
+  // Loop to handle nested/incomplete tags (e.g. "<scr<script>ipt>")
+  let prev = "";
+  while (prev !== stripped) {
+    prev = stripped;
+    stripped = stripped.replace(/<[^>]+>/g, "");
+  }
+  stripped = stripped.trim();
   // Take first line only
   const firstLine = (stripped.split("\n")[0] ?? "").trim();
   if (!firstLine) return "Untitled session";

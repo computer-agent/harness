@@ -2,18 +2,7 @@ import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { getHomeDir } from "./config.js";
 import { type AgentManifest, loadAgentManifest } from "./manifest.js";
-
-/** Validate userId to prevent path traversal. Only alphanumeric + hyphens allowed. */
-const USER_ID_RE = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/i;
-
-function validateUserId(userId: string): void {
-  if (!userId || userId.length < 2 || userId.length > 64 || !USER_ID_RE.test(userId)) {
-    throw new Error(`Invalid userId: must be 2-64 alphanumeric characters or hyphens, got "${userId}"`);
-  }
-  if (userId.includes("..") || userId.includes("/") || userId.includes("\0")) {
-    throw new Error("Invalid userId: contains path traversal characters");
-  }
-}
+import { validateName } from "./path-safety.js";
 
 export interface AgentContext {
   name: string;
@@ -46,6 +35,7 @@ export function getAgentsDir(): string {
 }
 
 export function resolveAgent(name: string): AgentContext {
+  validateName(name, "agent name");
   const agentDir = join(getAgentsDir(), name);
   const identityPath = join(agentDir, "IDENTITY.md");
 
@@ -84,7 +74,8 @@ export function resolveAgent(name: string): AgentContext {
  * The shared agent memory (memory/CONTEXT.md) is read-only for remote users.
  */
 export function resolveRemoteAgent(name: string, userId: string): AgentContext {
-  validateUserId(userId);
+  validateName(name, "agent name");
+  validateName(userId, "user ID");
 
   const agentDir = join(getAgentsDir(), name);
   const identityPath = join(agentDir, "IDENTITY.md");

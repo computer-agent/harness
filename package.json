@@ -50,6 +50,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.76",
     "@dotenvx/dotenvx": "^1.52.0",
     "@fastify/cors": "^11.2.0",
+    "@fastify/rate-limit": "^10.3.0",
     "@fastify/websocket": "^11.2.0",
     "@mozilla/readability": "^0.6.0",
     "@types/express": "^5.0.6",
