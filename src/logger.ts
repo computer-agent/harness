@@ -7,16 +7,7 @@
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
-export type LogCategory =
-  | "auth"
-  | "session"
-  | "agent"
-  | "tool"
-  | "mcp"
-  | "cost"
-  | "health"
-  | "server"
-  | "error";
+export type LogCategory = "auth" | "session" | "agent" | "tool" | "mcp" | "cost" | "health" | "server" | "error";
 
 export interface LogEntry {
   timestamp: string;
@@ -51,11 +42,7 @@ export class Logger {
   private readonly fields: LoggerFields;
   private readonly writeFn: (line: string) => void;
 
-  constructor(
-    level: LogLevel = "info",
-    fields: LoggerFields = {},
-    writeFn?: (line: string) => void,
-  ) {
+  constructor(level: LogLevel = "info", fields: LoggerFields = {}, writeFn?: (line: string) => void) {
     this.minLevel = LEVEL_ORDER[level];
     this.fields = fields;
     this.writeFn = writeFn ?? ((line: string) => process.stdout.write(`${line}\n`));
@@ -63,26 +50,42 @@ export class Logger {
 
   /** Create a child logger with additional pre-filled fields. */
   child(fields: LoggerFields): Logger {
-    return new Logger(
-      this.levelName(),
-      { ...this.fields, ...fields },
-      this.writeFn,
-    );
+    return new Logger(this.levelName(), { ...this.fields, ...fields }, this.writeFn);
   }
 
-  debug(category: LogCategory, event: string, message: string, extra?: { details?: Record<string, unknown>; durationMs?: number }): void {
+  debug(
+    category: LogCategory,
+    event: string,
+    message: string,
+    extra?: { details?: Record<string, unknown>; durationMs?: number },
+  ): void {
     this.log("debug", category, event, message, extra);
   }
 
-  info(category: LogCategory, event: string, message: string, extra?: { details?: Record<string, unknown>; durationMs?: number }): void {
+  info(
+    category: LogCategory,
+    event: string,
+    message: string,
+    extra?: { details?: Record<string, unknown>; durationMs?: number },
+  ): void {
     this.log("info", category, event, message, extra);
   }
 
-  warn(category: LogCategory, event: string, message: string, extra?: { details?: Record<string, unknown>; durationMs?: number }): void {
+  warn(
+    category: LogCategory,
+    event: string,
+    message: string,
+    extra?: { details?: Record<string, unknown>; durationMs?: number },
+  ): void {
     this.log("warn", category, event, message, extra);
   }
 
-  error(category: LogCategory, event: string, message: string, extra?: { details?: Record<string, unknown>; durationMs?: number }): void {
+  error(
+    category: LogCategory,
+    event: string,
+    message: string,
+    extra?: { details?: Record<string, unknown>; durationMs?: number },
+  ): void {
     this.log("error", category, event, message, extra);
   }
 

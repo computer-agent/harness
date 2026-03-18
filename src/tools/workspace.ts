@@ -132,7 +132,8 @@ export function createWorkspaceTools(workspaceDir: string) {
           ],
         };
       }
-      const updated = content.slice(0, indices[0]) + new_str + content.slice(indices[0] + old_str.length);
+      const matchIdx = indices[0] ?? 0;
+      const updated = content.slice(0, matchIdx) + new_str + content.slice(matchIdx + old_str.length);
       await writeFile(target, updated, "utf-8");
       return { content: [{ type: "text" as const, text: `Edited: ${path}` }] };
     },

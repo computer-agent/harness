@@ -289,7 +289,7 @@ Body.`;
     assert.strictEqual(manifest.displayName, "Bad-tools");
     assert.strictEqual(manifest.frontmatter.tools, undefined); // fell back to defaults
     assert.ok(warnings.length > 0);
-    assert.ok(warnings[0].message.includes("validation failed"));
+    assert.ok(warnings[0]?.message.includes("validation failed"));
   });
 
   it("extracts first paragraph as description when not in frontmatter", async () => {

@@ -115,7 +115,7 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
     if (agentId && readyState === ReadyState.OPEN) {
       sendSubscribe(agentId, sessionId, useChatStore.getState().lastMessageId);
     }
-  }, [agentId, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [agentId, sessionId]);
 
   // Process incoming messages
   useEffect(() => {
@@ -207,7 +207,7 @@ export function useAgentChat(agentId: string | undefined, sessionId: string | nu
         }
         break;
     }
-  }, [lastJsonMessage]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lastJsonMessage]);
 
   // Handle different WS error codes with appropriate UI feedback
   const handleWsError = useCallback(

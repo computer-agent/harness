@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { AgentExecutor, ExecutionEventBus, RequestContext } from "@a2a-js/sdk/server";
 import type { TaskStatusUpdateEvent } from "@a2a-js/sdk";
-import type { AgentContext } from "../agent-context.js";
-import type { HarnessConfig } from "../config.js";
+import type { AgentExecutor, ExecutionEventBus, RequestContext } from "@a2a-js/sdk/server";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { buildOptions, buildSystemPrompt, sendMessage } from "../agent.js";
+import type { AgentContext } from "../agent-context.js";
+import type { HarnessConfig } from "../config.js";
 
 function extractTextFromMessage(message: { parts: Array<{ kind: string; text?: string }> }): string {
   return message.parts

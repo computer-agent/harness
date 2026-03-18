@@ -87,10 +87,17 @@ export async function exportUserData(userId: string): Promise<Buffer> {
   const pipelinePromise = pipeline(archive, bufferStream);
 
   // Add metadata
-  archive.append(JSON.stringify({
-    exportedAt: new Date().toISOString(),
-    userId,
-  }, null, 2), { name: `export-${userId}/metadata.json` });
+  archive.append(
+    JSON.stringify(
+      {
+        exportedAt: new Date().toISOString(),
+        userId,
+      },
+      null,
+      2,
+    ),
+    { name: `export-${userId}/metadata.json` },
+  );
 
   // Scan agents
   try {
@@ -242,7 +249,9 @@ export async function runRetentionCleanup(config: PrivacyConfig, logger?: Logger
       const sessionsBase = join(stateDir, agentDir, "sessions");
       report.sessionsDeleted += await cleanOldFiles(sessionsBase, sessionCutoff);
     }
-  } catch { /* no state dir */ }
+  } catch {
+    /* no state dir */
+  }
 
   // Clean old workspace files
   const agentsDir = join(homeDir, "agents");
@@ -252,7 +261,9 @@ export async function runRetentionCleanup(config: PrivacyConfig, logger?: Logger
       const workspaceBase = join(agentsDir, agentId, "workspace");
       report.workspaceFilesDeleted += await cleanOldFiles(workspaceBase, workspaceCutoff);
     }
-  } catch { /* no agents dir */ }
+  } catch {
+    /* no agents dir */
+  }
 
   // Clean old usage data
   const usageDir = join(stateDir, "usage");
@@ -267,11 +278,19 @@ export async function runRetentionCleanup(config: PrivacyConfig, logger?: Logger
           await rm(filePath);
           report.usageFilesDeleted++;
         }
-      } catch { /* skip */ }
+      } catch {
+        /* skip */
+      }
     }
-  } catch { /* no usage dir */ }
+  } catch {
+    /* no usage dir */
+  }
 
-  logger?.info("server", "retention.cleanup", `Retention cleanup: ${report.sessionsDeleted} sessions, ${report.workspaceFilesDeleted} workspace files, ${report.usageFilesDeleted} usage files deleted`);
+  logger?.info(
+    "server",
+    "retention.cleanup",
+    `Retention cleanup: ${report.sessionsDeleted} sessions, ${report.workspaceFilesDeleted} workspace files, ${report.usageFilesDeleted} usage files deleted`,
+  );
 
   return report;
 }
@@ -289,9 +308,13 @@ async function cleanOldFiles(baseDir: string, cutoffMs: number): Promise<number>
           count += files.length;
           await rm(userPath, { recursive: true, force: true });
         }
-      } catch { /* skip */ }
+      } catch {
+        /* skip */
+      }
     }
-  } catch { /* dir doesn't exist */ }
+  } catch {
+    /* dir doesn't exist */
+  }
   return count;
 }
 
@@ -301,13 +324,26 @@ export function privacyDisclosure(policyVersion: string): object {
   return {
     policyVersion,
     dataCollected: [
-      { type: "Session metadata", description: "Session ID, name, timestamps", retention: "Configurable (default 90 days)" },
-      { type: "User memory", description: "Agent-written notes about interactions", retention: "Configurable (default 365 days)" },
+      {
+        type: "Session metadata",
+        description: "Session ID, name, timestamps",
+        retention: "Configurable (default 90 days)",
+      },
+      {
+        type: "User memory",
+        description: "Agent-written notes about interactions",
+        retention: "Configurable (default 365 days)",
+      },
       { type: "User workspace", description: "Files created by agents", retention: "Configurable (default 365 days)" },
       { type: "Usage data", description: "Token counts and timestamps", retention: "Configurable (default 365 days)" },
-      { type: "Access logs", description: "Timestamps, agent used, tool calls (no message content)", retention: "Operational" },
+      {
+        type: "Access logs",
+        description: "Timestamps, agent used, tool calls (no message content)",
+        retention: "Operational",
+      },
     ],
-    dataUse: "Your data is used to provide the AI agent service, maintain session continuity, and track usage for billing purposes.",
+    dataUse:
+      "Your data is used to provide the AI agent service, maintain session continuity, and track usage for billing purposes.",
     rights: {
       access: "GET /api/users/:userId/data — Export all your data as a ZIP archive",
       deletion: "Contact the operator to request deletion of all your data",

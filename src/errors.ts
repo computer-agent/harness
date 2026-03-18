@@ -24,12 +24,10 @@ const patterns: Array<{
     }),
   },
   {
-    test: (msg, status) =>
-      status === 403 || /forbidden|permission denied|access denied|insufficient.*scope/i.test(msg),
+    test: (msg, status) => status === 403 || /forbidden|permission denied|access denied|insufficient.*scope/i.test(msg),
     classify: () => ({
       category: "auth_failed",
-      suggestion:
-        "Your credentials may lack the required scopes. Run 'claude login' to re-authenticate.",
+      suggestion: "Your credentials may lack the required scopes. Run 'claude login' to re-authenticate.",
     }),
   },
   {
@@ -56,8 +54,7 @@ const patterns: Array<{
     }),
   },
   {
-    test: (msg) =>
-      /ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET|fetch failed|network|socket hang up/i.test(msg),
+    test: (msg) => /ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET|fetch failed|network|socket hang up/i.test(msg),
     classify: () => ({
       category: "network",
       suggestion: "Check your internet connection and any proxy/firewall settings.",

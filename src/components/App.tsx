@@ -217,7 +217,8 @@ function reducer(state: AppState, action: Action): AppState {
     case "TOOL_USE_DETAIL": {
       if (state.toolActions.length === 0) return state;
       const updated = [...state.toolActions];
-      updated[updated.length - 1] = { ...updated[updated.length - 1], detail: action.detail };
+      const last = updated[updated.length - 1];
+      if (last) updated[updated.length - 1] = { ...last, detail: action.detail };
       return { ...state, toolActions: updated };
     }
     case "SET_SESSION":
@@ -639,8 +640,8 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
           const num = parseInt(arg.slice(1), 10);
           if (state.lastListing && num >= 1 && num <= state.lastListing.length) {
             const session = state.lastListing[num - 1];
-            targetId = session.id;
-            targetName = session.name;
+            targetId = session?.id ?? null;
+            targetName = session?.name ?? null;
           } else {
             dispatch({
               type: "ADD_SYSTEM_MESSAGE",
@@ -729,7 +730,6 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
 
       if (trimmed.startsWith("/effort")) {
         const arg = trimmed.slice("/effort".length).trim().toLowerCase();
-        const validLevels = ["low", "medium", "med", "high", "max"] as const;
         const currentEffort = state.effortOverride ?? config.effort;
 
         if (!arg) {
@@ -788,7 +788,17 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
       }
       setQueueCount(0);
     },
-    [state.sessionId, state.lastListing, exit, sessionDirs, processMessage],
+    [
+      state.sessionId,
+      state.lastListing,
+      exit,
+      sessionDirs,
+      processMessage,
+      state.effortOverride,
+      config.effort,
+      state.modelOverride,
+      config.model,
+    ],
   );
 
   const showSessionLine = ctrlCWarning || queueCount > 0;

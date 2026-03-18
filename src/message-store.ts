@@ -13,20 +13,13 @@ function messagesPath(dirs: SessionDirs, sessionId: string): string {
   return join(dirs.sessionsDir, sessionId, "messages.jsonl");
 }
 
-export async function appendMessage(
-  dirs: SessionDirs,
-  sessionId: string,
-  message: PersistedMessage,
-): Promise<void> {
+export async function appendMessage(dirs: SessionDirs, sessionId: string, message: PersistedMessage): Promise<void> {
   const filePath = messagesPath(dirs, sessionId);
   await mkdir(join(dirs.sessionsDir, sessionId), { recursive: true });
-  await appendFile(filePath, JSON.stringify(message) + "\n", "utf-8");
+  await appendFile(filePath, `${JSON.stringify(message)}\n`, "utf-8");
 }
 
-export async function loadMessages(
-  dirs: SessionDirs,
-  sessionId: string,
-): Promise<PersistedMessage[]> {
+export async function loadMessages(dirs: SessionDirs, sessionId: string): Promise<PersistedMessage[]> {
   const filePath = messagesPath(dirs, sessionId);
   let raw: string;
   try {

@@ -242,7 +242,7 @@ System prompt body.`;
     assert.deepStrictEqual(manifest.frontmatter.tags, ["test", "full"]);
     assert.deepStrictEqual(manifest.frontmatter.starters, ["Hello", "Help me with X"]);
     assert.deepStrictEqual(manifest.frontmatter.tools?.allow, ["memory", "web", "workspace", "tasks", "models"]);
-    assert.strictEqual(manifest.frontmatter.mcp[0].server, "test-mcp");
+    assert.strictEqual(manifest.frontmatter.mcp[0]?.server, "test-mcp");
     assert.strictEqual(manifest.frontmatter.model, "claude-opus-4-6[1m]");
     assert.strictEqual(manifest.frontmatter.effort, "max");
     assert.strictEqual(manifest.frontmatter.access, "users");

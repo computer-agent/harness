@@ -4,14 +4,14 @@ import type { HarnessConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import type { McpServerManifest, ToolDomain } from "../manifest.js";
 import type { RemoteSandboxPolicy } from "../sandbox.js";
+import { createA2ATools } from "./a2a.js";
 import { createIntrospectionTools } from "./introspection.js";
 import { createMemoryTools } from "./memory.js";
 import { modelQueryTools } from "./model-query.js";
+import { createScratchpadTools } from "./scratchpad.js";
 import { createSandboxedShellTools, createShellTools } from "./shell.js";
 import { createTaskTools } from "./tasks.js";
 import { createWebTools } from "./web.js";
-import { createA2ATools } from "./a2a.js";
-import { createScratchpadTools } from "./scratchpad.js";
 import { createWorkspaceTools } from "./workspace.js";
 
 export interface ToolFilter {
@@ -101,10 +101,7 @@ export function createAgentServers(
     servers[`${prefix}a2a`] = createServer(`${prefix}a2a`, createA2ATools(config.tools.a2a.agents));
   }
   if (config.tools.scratchpad.enabled) {
-    servers[`${prefix}scratchpad`] = createServer(
-      `${prefix}scratchpad`,
-      createScratchpadTools(ctx.workspaceDir),
-    );
+    servers[`${prefix}scratchpad`] = createServer(`${prefix}scratchpad`, createScratchpadTools(ctx.workspaceDir));
   }
 
   return servers;

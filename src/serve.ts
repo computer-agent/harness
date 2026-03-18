@@ -15,14 +15,28 @@ import {
   userCanAccessAgent,
 } from "./access.js";
 import { buildOptions, buildSystemPrompt, sendMessage } from "./agent.js";
-import { CostTracker } from "./cost.js";
 import { type AgentContext, getAgentsDir, listAgents, resolveAgent, resolveRemoteAgent } from "./agent-context.js";
-import { type HarnessConfig, getConfigPath, getHomeDir, loadConfig } from "./config.js";
+import { getConfigPath, getHomeDir, type HarnessConfig, loadConfig } from "./config.js";
+import { CostTracker } from "./cost.js";
 import { loadAgentEnv } from "./env.js";
 import { classifyError } from "./errors.js";
+import { HealthMonitor } from "./health.js";
+import { Logger } from "./logger.js";
 import type { AgentManifest } from "./manifest.js";
 import { MessageBuffer } from "./message-buffer.js";
 import { appendMessage, loadMessages, type PersistedMessage } from "./message-store.js";
+import {
+  checkConsent,
+  DEFAULT_PRIVACY_CONFIG,
+  deleteUserData,
+  exportUserData,
+  type PrivacyConfig,
+  privacyDisclosure,
+  recordConsent,
+  runRetentionCleanup,
+} from "./privacy.js";
+import { RateLimiter } from "./rate-limit.js";
+import { REMOTE_SANDBOX_DEFAULTS, type RemoteSandboxPolicy } from "./sandbox.js";
 import {
   createSessionMeta,
   deleteSession,
@@ -32,21 +46,7 @@ import {
   touchSession,
 } from "./sessions.js";
 import type { WsAssistantMessage, WsClientMessage, WsToken, WsToolUseStart } from "./types/ws.js";
-import { Logger } from "./logger.js";
-import {
-  checkConsent,
-  recordConsent,
-  exportUserData,
-  deleteUserData,
-  runRetentionCleanup,
-  privacyDisclosure,
-  DEFAULT_PRIVACY_CONFIG,
-  type PrivacyConfig,
-} from "./privacy.js";
-import { RateLimiter } from "./rate-limit.js";
-import { REMOTE_SANDBOX_DEFAULTS, type RemoteSandboxPolicy } from "./sandbox.js";
 import { UsageTracker } from "./usage.js";
-import { HealthMonitor } from "./health.js";
 import { FileWatcher } from "./watcher.js";
 
 const PKG_VERSION = (() => {
@@ -188,12 +188,7 @@ function broadcastToAll(message: object): void {
 
 // ─── Route registration ───
 
-function registerHealthRoutes(
-  app: FastifyInstance,
-  opts: ServeOptions,
-  healthMonitor: HealthMonitor,
-  logger: Logger,
-) {
+function registerHealthRoutes(app: FastifyInstance, opts: ServeOptions, healthMonitor: HealthMonitor, _logger: Logger) {
   // Shallow health — no auth, fast
   app.get("/health", async (_request, reply) => {
     const health = healthMonitor.shallowCheck();
@@ -307,7 +302,12 @@ function registerSessionRoutes(app: FastifyInstance, opts: ServeOptions) {
   });
 }
 
-function registerUsageRoutes(app: FastifyInstance, opts: ServeOptions, usageTracker: UsageTracker, costTracker: CostTracker) {
+function registerUsageRoutes(
+  app: FastifyInstance,
+  opts: ServeOptions,
+  usageTracker: UsageTracker,
+  costTracker: CostTracker,
+) {
   app.get("/api/usage", async (request, reply) => {
     const user = authenticateRequest(request as any, opts.access);
     if (!user) return reply.code(401).send({ error: "Invalid or missing token" });
@@ -356,11 +356,7 @@ function registerAdminRoutes(app: FastifyInstance, opts: ServeOptions, costTrack
   });
 }
 
-function registerPrivacyRoutes(
-  app: FastifyInstance,
-  opts: ServeOptions,
-  logger: Logger,
-) {
+function registerPrivacyRoutes(app: FastifyInstance, opts: ServeOptions, logger: Logger) {
   // Privacy disclosure — no auth required
   app.get("/api/privacy", async () => {
     const privacyConfig = opts.config.serve?.privacy ?? DEFAULT_PRIVACY_CONFIG;
@@ -412,8 +408,12 @@ function registerPrivacyRoutes(
 
       // Check if anything was actually deleted
       const { deleted } = report;
-      const totalDeleted = deleted.sessions + deleted.memoryFiles + deleted.workspaceFiles +
-        (deleted.usageFile ? 1 : 0) + (deleted.consentFile ? 1 : 0);
+      const totalDeleted =
+        deleted.sessions +
+        deleted.memoryFiles +
+        deleted.workspaceFiles +
+        (deleted.usageFile ? 1 : 0) +
+        (deleted.consentFile ? 1 : 0);
 
       if (totalDeleted === 0) {
         return reply.code(404).send({ error: "No data found for user" });
@@ -455,10 +455,12 @@ async function handleSubscribe(
   const policyVersion = privacyConfig.policyVersion ?? DEFAULT_PRIVACY_CONFIG.policyVersion;
   const hasConsent = await checkConsent(user.name, policyVersion);
   if (!hasConsent) {
-    ws.send(JSON.stringify({
-      type: "consent_required",
-      policyVersion,
-    }));
+    ws.send(
+      JSON.stringify({
+        type: "consent_required",
+        policyVersion,
+      }),
+    );
     return null;
   }
 
@@ -521,11 +523,7 @@ async function handleMessage(
   // If resume fails with "No conversation found", retry without resume.
   let resumeId = conversation.sdkSessionConfirmed ? (conversation.sessionId ?? undefined) : undefined;
 
-  const onToolApproval = async (
-    toolId: string,
-    toolName: string,
-    input: Record<string, unknown>,
-  ): Promise<boolean> => {
+  const onToolApproval = async (toolId: string, toolName: string, input: Record<string, unknown>): Promise<boolean> => {
     return new Promise((resolve) => {
       conversation.pendingApprovals.set(toolId, resolve);
       ws.send(
@@ -605,7 +603,21 @@ async function handleMessage(
       // Retry without resume — treat as new conversation
       resumeId = undefined;
       userMessagePersisted = false;
-      options = buildOptions(agentContext, { systemPrompt, cwd, agentEnv, toolFilter, onToolApproval, onToolResult, sandboxPolicy, mcpConfigs: manifest.frontmatter.mcp, isRemoteSession: true }, config);
+      options = buildOptions(
+        agentContext,
+        {
+          systemPrompt,
+          cwd,
+          agentEnv,
+          toolFilter,
+          onToolApproval,
+          onToolResult,
+          sandboxPolicy,
+          mcpConfigs: manifest.frontmatter.mcp,
+          isRemoteSession: true,
+        },
+        config,
+      );
       q = sendMessage(msg.content, options);
     } else {
       throw err;
@@ -817,19 +829,24 @@ async function handleMessage(
     usageTracker.recordTurn(conversation.sessionId, conversation.agentId, user.name, accumulatedUsage);
 
     // Record cost and check budget
-    costTracker.recordUsage(user.name, conversation.sessionId, accumulatedUsage.inputTokens, accumulatedUsage.outputTokens);
+    costTracker.recordUsage(
+      user.name,
+      conversation.sessionId,
+      accumulatedUsage.inputTokens,
+      accumulatedUsage.outputTokens,
+    );
     const postBudget = costTracker.checkBudget(user.name, conversation.sessionId);
     if (postBudget.warnings.length > 0) {
       ws.send(JSON.stringify({ type: "budget_warning", warnings: postBudget.warnings }));
     }
-    if (!postBudget.allowed) {
+    if (!postBudget.allowed && postBudget.exceeded) {
       ws.send(
         JSON.stringify({
           type: "budget_exceeded",
-          reason: postBudget.exceeded!.budget,
-          limit: postBudget.exceeded!.limit,
-          used: postBudget.exceeded!.used,
-          resetsAt: postBudget.exceeded!.resetsAt,
+          reason: postBudget.exceeded.budget,
+          limit: postBudget.exceeded.limit,
+          used: postBudget.exceeded.used,
+          resetsAt: postBudget.exceeded.resetsAt,
         }),
       );
     }
@@ -857,7 +874,14 @@ async function handleMessage(
   }
 }
 
-function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageTracker: UsageTracker, logger: Logger, rateLimiter: RateLimiter, costTracker: CostTracker) {
+function registerWebSocketRoute(
+  app: FastifyInstance,
+  opts: ServeOptions,
+  usageTracker: UsageTracker,
+  logger: Logger,
+  rateLimiter: RateLimiter,
+  costTracker: CostTracker,
+) {
   app.register(async (fastify) => {
     fastify.get("/ws", { websocket: true }, (socket, request) => {
       const ws = socket as unknown as WebSocket;
@@ -868,7 +892,7 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
       // Auth: read token from query param or headers
       const token = extractWsToken(request);
       const user = token ? lookupUser(token, opts.access) : null;
-      if (!user) {
+      if (!token || !user) {
         // Rate limit auth failures per IP
         if (!rateLimiter.checkAuthFailure(clientIp)) {
           logger.warn("auth", "auth.failure", "Auth failure rate limited", {
@@ -902,7 +926,7 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
       activeConnectionCount++;
 
       // Track connected client for broadcasting and token revocation
-      connectedClients.set(ws, { user, token: token! });
+      connectedClients.set(ws, { user, token });
 
       ws.send(JSON.stringify({ type: "connected", connectionId }));
 
@@ -954,34 +978,38 @@ function registerWebSocketRoute(app: FastifyInstance, opts: ServeOptions, usageT
               }
               // Message length check
               if (!rateLimiter.checkMessageLength(msg.content)) {
-                ws.send(JSON.stringify({
-                  type: "error",
-                  code: "message_too_large",
-                  message: "Message exceeds character limit",
-                }));
+                ws.send(
+                  JSON.stringify({
+                    type: "error",
+                    code: "message_too_large",
+                    message: "Message exceeds character limit",
+                  }),
+                );
                 return;
               }
               // Per-user message rate limiting
               const rateCheck = rateLimiter.checkMessageRate(user.name);
               if (!rateCheck.allowed) {
-                ws.send(JSON.stringify({
-                  type: "error",
-                  code: "rate_limited",
-                  message: "Too many messages",
-                  retryAfter: rateCheck.retryAfter,
-                }));
+                ws.send(
+                  JSON.stringify({
+                    type: "error",
+                    code: "rate_limited",
+                    message: "Too many messages",
+                    retryAfter: rateCheck.retryAfter,
+                  }),
+                );
                 return;
               }
               // Pre-flight budget check
               const budgetCheck = costTracker.checkBudget(user.name, activeConversation.sessionId ?? "");
-              if (!budgetCheck.allowed) {
+              if (!budgetCheck.allowed && budgetCheck.exceeded) {
                 ws.send(
                   JSON.stringify({
                     type: "budget_exceeded",
-                    reason: budgetCheck.exceeded!.budget,
-                    limit: budgetCheck.exceeded!.limit,
-                    used: budgetCheck.exceeded!.used,
-                    resetsAt: budgetCheck.exceeded!.resetsAt,
+                    reason: budgetCheck.exceeded.budget,
+                    limit: budgetCheck.exceeded.limit,
+                    used: budgetCheck.exceeded.used,
+                    resetsAt: budgetCheck.exceeded.resetsAt,
                   }),
                 );
                 return;
@@ -1165,7 +1193,9 @@ export async function startServer(opts: ServeOptions): Promise<void> {
             const user = lookupUser(clientInfo.token, opts.access);
             if (!user) {
               try {
-                ws.send(JSON.stringify({ type: "error", code: "token_revoked", message: "Your access has been revoked" }));
+                ws.send(
+                  JSON.stringify({ type: "error", code: "token_revoked", message: "Your access has been revoked" }),
+                );
                 ws.close(4003, "Token revoked");
               } catch {
                 // Already closed
@@ -1214,14 +1244,17 @@ export async function startServer(opts: ServeOptions): Promise<void> {
     ...DEFAULT_PRIVACY_CONFIG,
     ...opts.config.serve?.privacy,
   };
-  runRetentionCleanup(privacyConfig, logger).catch(err => {
+  runRetentionCleanup(privacyConfig, logger).catch((err) => {
     logger.error("server", "retention.cleanup_failed", `Initial retention cleanup failed: ${err}`);
   });
-  const retentionTimer = setInterval(() => {
-    runRetentionCleanup(privacyConfig, logger).catch(err => {
-      logger.error("server", "retention.cleanup_failed", `Retention cleanup failed: ${err}`);
-    });
-  }, 24 * 60 * 60 * 1000); // daily
+  const retentionTimer = setInterval(
+    () => {
+      runRetentionCleanup(privacyConfig, logger).catch((err) => {
+        logger.error("server", "retention.cleanup_failed", `Retention cleanup failed: ${err}`);
+      });
+    },
+    24 * 60 * 60 * 1000,
+  ); // daily
 
   // Graceful shutdown with connection draining
   const SHUTDOWN_TIMEOUT_MS = 30_000;

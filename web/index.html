@@ -7,7 +7,7 @@
     <title>Masters of AI</title>
     <script>
       // Prevent flash of wrong theme
-      (function () {
+      (() => {
         const theme = localStorage.getItem("mastersof-ai-theme");
         if (theme === "light") {
           document.documentElement.classList.remove("dark");

@@ -234,7 +234,15 @@ export function buildPerCommandBwrapArgs(
   for (const dir of ["/usr", "/lib", "/lib64", "/bin", "/sbin"]) {
     args.push(...roBind(dir));
   }
-  for (const f of ["/etc/resolv.conf", "/etc/ssl", "/etc/ca-certificates", "/etc/passwd", "/etc/group", "/etc/localtime", "/etc/timezone"]) {
+  for (const f of [
+    "/etc/resolv.conf",
+    "/etc/ssl",
+    "/etc/ca-certificates",
+    "/etc/passwd",
+    "/etc/group",
+    "/etc/localtime",
+    "/etc/timezone",
+  ]) {
     args.push(...roBind(f));
   }
 

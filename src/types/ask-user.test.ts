@@ -28,12 +28,12 @@ describe("parseQuestions", () => {
     };
     const result = parseQuestions(input);
     assert.strictEqual(result.length, 1);
-    assert.strictEqual(result[0].question, "Pick one");
-    assert.strictEqual(result[0].header, "Header");
-    assert.strictEqual(result[0].options.length, 1);
-    assert.strictEqual(result[0].options[0].label, "A");
-    assert.strictEqual(result[0].options[0].description, "Option A");
-    assert.strictEqual(result[0].multiSelect, false);
+    assert.strictEqual(result[0]?.question, "Pick one");
+    assert.strictEqual(result[0]?.header, "Header");
+    assert.strictEqual(result[0]?.options.length, 1);
+    assert.strictEqual(result[0]?.options[0]?.label, "A");
+    assert.strictEqual(result[0]?.options[0]?.description, "Option A");
+    assert.strictEqual(result[0]?.multiSelect, false);
   });
 
   it("parses multiple questions", () => {
@@ -45,32 +45,32 @@ describe("parseQuestions", () => {
     };
     const result = parseQuestions(input);
     assert.strictEqual(result.length, 2);
-    assert.strictEqual(result[0].question, "Q1");
-    assert.strictEqual(result[1].question, "Q2");
+    assert.strictEqual(result[0]?.question, "Q1");
+    assert.strictEqual(result[1]?.question, "Q2");
   });
 
   it("handles missing optional fields with defaults", () => {
     const result = parseQuestions({ questions: [{}] });
     assert.strictEqual(result.length, 1);
-    assert.strictEqual(result[0].question, "");
-    assert.strictEqual(result[0].header, "");
-    assert.deepStrictEqual(result[0].options, []);
-    assert.strictEqual(result[0].multiSelect, false);
+    assert.strictEqual(result[0]?.question, "");
+    assert.strictEqual(result[0]?.header, "");
+    assert.deepStrictEqual(result[0]?.options, []);
+    assert.strictEqual(result[0]?.multiSelect, false);
   });
 
   it("coerces non-string fields to strings", () => {
     const result = parseQuestions({ questions: [{ question: 123 }] });
-    assert.strictEqual(result[0].question, "123");
+    assert.strictEqual(result[0]?.question, "123");
   });
 
   it("handles options that are not arrays", () => {
     const result = parseQuestions({ questions: [{ options: "not-array" }] });
-    assert.deepStrictEqual(result[0].options, []);
+    assert.deepStrictEqual(result[0]?.options, []);
   });
 
   it("handles question with no options", () => {
     const result = parseQuestions({ questions: [{ question: "Q" }] });
-    assert.deepStrictEqual(result[0].options, []);
+    assert.deepStrictEqual(result[0]?.options, []);
   });
 
   it("preserves preview field when present", () => {
@@ -83,7 +83,7 @@ describe("parseQuestions", () => {
       ],
     };
     const result = parseQuestions(input);
-    assert.strictEqual(result[0].options[0].preview, "some preview");
+    assert.strictEqual(result[0]?.options[0]?.preview, "some preview");
   });
 
   it("omits preview field when absent", () => {
@@ -96,7 +96,8 @@ describe("parseQuestions", () => {
       ],
     };
     const result = parseQuestions(input);
-    assert.strictEqual("preview" in result[0].options[0], false);
+    const opt0 = result[0]?.options[0] ?? {};
+    assert.strictEqual("preview" in opt0, false);
   });
 
   it("omits preview field when falsy empty string", () => {
@@ -109,14 +110,15 @@ describe("parseQuestions", () => {
       ],
     };
     const result = parseQuestions(input);
-    assert.strictEqual("preview" in result[0].options[0], false);
+    const opt0 = result[0]?.options[0] ?? {};
+    assert.strictEqual("preview" in opt0, false);
   });
 
   it("handles multiSelect boolean coercion", () => {
     const r0 = parseQuestions({ questions: [{ multiSelect: 0 }] });
-    assert.strictEqual(r0[0].multiSelect, false);
+    assert.strictEqual(r0[0]?.multiSelect, false);
 
     const r1 = parseQuestions({ questions: [{ multiSelect: 1 }] });
-    assert.strictEqual(r1[0].multiSelect, true);
+    assert.strictEqual(r1[0]?.multiSelect, true);
   });
 });

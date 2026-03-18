@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, readdir } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type CanUseTool,
@@ -13,7 +13,7 @@ import type { AgentContext } from "./agent-context.js";
 import { createAgentRegistry } from "./agents/index.js";
 import type { HarnessConfig } from "./config.js";
 import type { Logger } from "./logger.js";
-import { type AgentManifest, type McpServerManifest, loadAgentManifest } from "./manifest.js";
+import { type AgentManifest, loadAgentManifest, type McpServerManifest } from "./manifest.js";
 import type { RemoteSandboxPolicy } from "./sandbox.js";
 import { createAgentServers, mergeExternalMcpServers, type ToolFilter } from "./tools/index.js";
 
@@ -165,9 +165,7 @@ function buildHooks(
         async (input) => {
           if (input.hook_event_name === "PostToolUse") {
             const output =
-              typeof input.tool_response === "string"
-                ? input.tool_response
-                : JSON.stringify(input.tool_response ?? "");
+              typeof input.tool_response === "string" ? input.tool_response : JSON.stringify(input.tool_response ?? "");
             onToolResult(input.tool_use_id, input.tool_name, output);
           }
           return { continue: true };
@@ -237,9 +235,7 @@ function buildCanUseTool(
     // --- B1/B2: Loop detection + verification tracking ---
     const isWrite = toolName.endsWith("__write_file") || toolName.endsWith("__edit_file");
     const isVerify =
-      toolName.endsWith("__read_file") ||
-      toolName.endsWith("__grep_files") ||
-      toolName.endsWith("__shell_exec");
+      toolName.endsWith("__read_file") || toolName.endsWith("__grep_files") || toolName.endsWith("__shell_exec");
 
     // Extract file path from tool input (used by both B1 and B2)
     const inp = input as Record<string, unknown>;
@@ -302,7 +298,14 @@ export function buildOptions(
   config: HarnessConfig,
 ): Options {
   const hooks = buildHooks(ctx, config, opts.onInstructionsLoaded, opts.onToolResult, opts.logger);
-  const canUseTool = buildCanUseTool(ctx, config, opts.onAskUserQuestion, opts.onToolApproval, opts.sandboxPolicy, opts.logger);
+  const canUseTool = buildCanUseTool(
+    ctx,
+    config,
+    opts.onAskUserQuestion,
+    opts.onToolApproval,
+    opts.sandboxPolicy,
+    opts.logger,
+  );
   const cwd = opts.cwd ?? ctx.workspaceDir;
   const agentEnv = opts.agentEnv ?? {};
 
@@ -351,7 +354,12 @@ async function buildEnvironmentContext(ctx: AgentContext, config: HarnessConfig)
     const entries = await readdir(ctx.workspaceDir);
     if (entries.length > 0) {
       parts.push("## Workspace Files\n");
-      parts.push(entries.slice(0, 20).map((e) => `- ${e}`).join("\n"));
+      parts.push(
+        entries
+          .slice(0, 20)
+          .map((e) => `- ${e}`)
+          .join("\n"),
+      );
       if (entries.length > 20) parts.push(`\n... and ${entries.length - 20} more`);
     }
   } catch {

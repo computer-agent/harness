@@ -54,7 +54,7 @@ export class RateLimiter {
     entry.timestamps = entry.timestamps.filter((t) => now - t < windowMs);
 
     if (entry.timestamps.length >= this.config.messagesPerMinute) {
-      const oldest = entry.timestamps[0];
+      const oldest = entry.timestamps[0] ?? 0;
       const retryAfter = Math.ceil((oldest + windowMs - now) / 1000);
       return { allowed: false, retryAfter };
     }

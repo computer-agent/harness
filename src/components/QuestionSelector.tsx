@@ -99,10 +99,10 @@ export function QuestionSelector({ questions, onComplete, onDismiss }: QuestionS
       if (current.multiSelect) {
         // If nothing toggled yet, select the focused item
         const selected = multiSelected.size > 0 ? multiSelected : new Set([selectedIndex]);
-        const labels = [...selected].sort().map((i) => allOptions[i].label);
+        const labels = [...selected].sort().map((i) => allOptions[i]?.label ?? "");
         commitAnswer(labels.join(", "));
       } else {
-        commitAnswer(allOptions[selectedIndex].label);
+        commitAnswer(allOptions[selectedIndex]?.label ?? "");
       }
     }
   });
@@ -134,13 +134,7 @@ export function QuestionSelector({ questions, onComplete, onDismiss }: QuestionS
         allOptions.map((opt, i) => {
           const focused = i === selectedIndex;
           const checked = current.multiSelect && multiSelected.has(i);
-          const prefix = current.multiSelect
-            ? checked
-              ? "  [x] "
-              : "  [ ] "
-            : focused
-              ? "  > "
-              : "    ";
+          const prefix = current.multiSelect ? (checked ? "  [x] " : "  [ ] ") : focused ? "  > " : "    ";
 
           return (
             <Box key={opt.label} flexDirection="row">
@@ -148,9 +142,7 @@ export function QuestionSelector({ questions, onComplete, onDismiss }: QuestionS
                 {prefix}
                 {opt.label}
               </Text>
-              {opt.description && i !== otherIndex && (
-                <Text dimColor> — {opt.description}</Text>
-              )}
+              {opt.description && i !== otherIndex && <Text dimColor> — {opt.description}</Text>}
             </Box>
           );
         })

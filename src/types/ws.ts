@@ -31,7 +31,13 @@ export interface WsConsentGranted {
   policyVersion: string;
 }
 
-export type WsClientMessage = WsSubscribe | WsMessage | WsInterrupt | WsPing | WsToolApprovalResponse | WsConsentGranted;
+export type WsClientMessage =
+  | WsSubscribe
+  | WsMessage
+  | WsInterrupt
+  | WsPing
+  | WsToolApprovalResponse
+  | WsConsentGranted;
 
 // ─── Server → Client ───
 

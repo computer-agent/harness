@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import { type RemoteSandboxPolicy, buildPerCommandBwrapArgs } from "../sandbox.js";
+import { buildPerCommandBwrapArgs, type RemoteSandboxPolicy } from "../sandbox.js";
 
 const exec = promisify(execFile);
 const DEFAULT_TIMEOUT = 30_000;

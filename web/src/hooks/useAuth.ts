@@ -20,7 +20,7 @@ export function useAuth() {
     } else {
       setIsReady(true);
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   return {
     // Only authenticated after server confirms the token

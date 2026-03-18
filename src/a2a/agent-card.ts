@@ -40,7 +40,10 @@ function deriveSkillsFromIdentity(identity: string): AgentSkill[] {
     if (line.startsWith("## ")) {
       if (currentH2 && currentBody.trim()) {
         skills.push({
-          id: currentH2.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, ""),
+          id: currentH2
+            .toLowerCase()
+            .replace(/\s+/g, "-")
+            .replace(/[^a-z0-9-]/g, ""),
           name: currentH2,
           description: currentBody.trim().slice(0, 500),
           tags: [],
@@ -55,7 +58,10 @@ function deriveSkillsFromIdentity(identity: string): AgentSkill[] {
 
   if (currentH2 && currentBody.trim()) {
     skills.push({
-      id: currentH2.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, ""),
+      id: currentH2
+        .toLowerCase()
+        .replace(/\s+/g, "-")
+        .replace(/[^a-z0-9-]/g, ""),
       name: currentH2,
       description: currentBody.trim().slice(0, 500),
       tags: [],

@@ -1,63 +1,99 @@
 {
-  "project": "Harness Upgrades — A2A + Harness Engineering",
-  "spec": "SPEC-harness-upgrades.md",
-  "updatedAt": "2026-03-17T16:00:00Z",
+  "task": "Code quality, tooling, port change, and CI setup",
+  "created": "2026-03-17",
+  "updatedAt": "2026-03-17",
   "status": "complete",
-  "summary": "All 12 items implemented. 11 completed, 1 skipped (A4 — SDK doesn't support custom agent execution).",
-  "waves": {
-    "wave1": {
-      "name": "Quick Wins (hooks + prompts)",
+  "items": [
+    {
+      "name": "Fix Biome failures",
       "status": "completed",
-      "items": {
-        "B1": { "name": "Pre-completion verification hook", "status": "completed" },
-        "B2": { "name": "Loop detection", "status": "completed" },
-        "B4": { "name": "Structured progress tracking", "status": "completed" },
-        "B5": { "name": "Environment onboarding", "status": "completed" },
-        "B7": { "name": "Sub-agent response condensation", "status": "completed" }
-      }
+      "files": [
+        "biome.json",
+        "src/serve.ts",
+        "src/message-store.ts",
+        "src/components/App.tsx",
+        "web/vite.config.ts",
+        "src/watcher.ts",
+        "src/tools/a2a.ts",
+        "tests/test-ember-flow.mjs"
+      ],
+      "validation": ["`npx biome check` exits 0 ✓", "83/83 unit tests pass ✓"]
     },
-    "wave2": {
-      "name": "Tool Additions",
+    {
+      "name": "Fix web TypeScript failures",
       "status": "completed",
-      "items": {
-        "B3": { "name": "Silent success / verbose failure", "status": "completed" },
-        "B6": { "name": "Shared sub-agent scratchpad", "status": "completed" }
-      }
+      "files": ["web/tsconfig.app.json", "web/src/vite-env.d.ts"],
+      "validation": ["`cd web && npx tsc -b` exits 0 ✓"]
     },
-    "wave3": {
-      "name": "A2A Foundation",
+    {
+      "name": "Enable noUncheckedIndexedAccess",
       "status": "completed",
-      "items": {
-        "A1": { "name": "Agent server mode (--serve)", "status": "completed" },
-        "A2": { "name": "A2A client tool", "status": "completed" },
-        "A5": { "name": "Agent card generation (--card)", "status": "completed" }
-      }
+      "files": [
+        "tsconfig.json",
+        "src/components/MultilineInput.tsx",
+        "src/components/App.tsx",
+        "src/components/QuestionSelector.tsx",
+        "src/cost.ts",
+        "src/index.tsx",
+        "src/rate-limit.ts",
+        "src/sessions.ts",
+        "src/tools/memory.ts",
+        "src/tools/workspace.ts",
+        "src/types/ask-user.test.ts",
+        "src/integration.test.ts",
+        "src/manifest.test.ts"
+      ],
+      "validation": ["tsconfig.json has noUncheckedIndexedAccess: true ✓", "`npx tsc --noEmit` exits 0 ✓"]
     },
-    "wave4": {
-      "name": "A2A Extensions",
+    {
+      "name": "Change default port to 3100",
       "status": "completed",
-      "items": {
-        "A3": { "name": "A2A agent registry in config", "status": "completed" },
-        "A4": { "name": "Sub-agent type: A2A remote", "status": "skipped", "reason": "SDK AgentDefinition is declarative only. Use A2 tool-based access." }
-      }
+      "files": [
+        "src/index.tsx",
+        "web/vite.config.ts",
+        "tests/test-integration.sh",
+        "tests/test-ws.mjs",
+        "tests/test-isolation.mjs",
+        "tests/test-ember-flow.mjs",
+        "tests/test-ember-tools.mjs"
+      ],
+      "validation": [
+        "No runtime port 3000 references in src/tests/web ✓",
+        "Vite proxy targets 3100 ✓",
+        "Test scripts target 3100 ✓"
+      ]
+    },
+    {
+      "name": "Add .editorconfig",
+      "status": "completed",
+      "files": [".editorconfig"],
+      "validation": [".editorconfig exists with indent/line-ending settings matching biome.json ✓"]
+    },
+    {
+      "name": "Add Lefthook pre-commit hooks",
+      "status": "completed",
+      "files": ["lefthook.yml", "package.json"],
+      "validation": [
+        "lefthook.yml with pre-commit lint + typecheck ✓",
+        "lefthook installed as devDependency ✓",
+        "Git hooks installed ✓"
+      ]
+    },
+    {
+      "name": "Add GitHub Actions CI workflow",
+      "status": "completed",
+      "files": [".github/workflows/ci.yml", "README.md"],
+      "validation": [
+        "Workflow file exists ✓",
+        "Runs biome check + tsc + knip + tests on push/PR ✓",
+        "CI badge added to README.md ✓"
+      ]
+    },
+    {
+      "name": "Clean up stale eslint-disable comments",
+      "status": "completed",
+      "files": ["web/src/hooks/useAuth.ts", "web/src/hooks/useAgentChat.ts"],
+      "validation": ["No eslint-disable comments remain ✓"]
     }
-  },
-  "newFiles": [
-    "src/a2a/index.ts",
-    "src/a2a/server.ts",
-    "src/a2a/agent-card.ts",
-    "src/a2a/executor.ts",
-    "src/tools/a2a.ts",
-    "src/tools/scratchpad.ts"
-  ],
-  "modifiedFiles": [
-    "src/agent.ts",
-    "src/config.ts",
-    "src/tools/index.ts",
-    "src/agents/researcher.ts",
-    "src/agents/deep-thinker.ts",
-    "src/agents/writer.ts",
-    "src/index.tsx",
-    "package.json"
   ]
 }

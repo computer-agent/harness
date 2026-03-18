@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getHomeDir } from "./config.js";
 
@@ -99,11 +99,11 @@ export class CostTracker {
     // Compute resetsAt: when the oldest entry in the window expires
     const dailyResetsAt =
       data.dailyTokens.length > 0
-        ? new Date(data.dailyTokens[0].timestamp + 24 * 60 * 60 * 1000).toISOString()
+        ? new Date((data.dailyTokens[0]?.timestamp ?? 0) + 24 * 60 * 60 * 1000).toISOString()
         : undefined;
     const monthlyResetsAt =
       data.monthlyTokens.length > 0
-        ? new Date(data.monthlyTokens[0].timestamp + 30 * 24 * 60 * 60 * 1000).toISOString()
+        ? new Date((data.monthlyTokens[0]?.timestamp ?? 0) + 30 * 24 * 60 * 60 * 1000).toISOString()
         : undefined;
 
     const checks: Array<{

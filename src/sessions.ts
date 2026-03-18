@@ -89,7 +89,7 @@ function nameFromMessage(msg: string): string {
   // Strip XML tags (SDK wraps commands in tags)
   const stripped = msg.replace(/<[^>]+>/g, "").trim();
   // Take first line only
-  const firstLine = stripped.split("\n")[0].trim();
+  const firstLine = (stripped.split("\n")[0] ?? "").trim();
   if (!firstLine) return "Untitled session";
   if (firstLine.length <= 60) return firstLine;
   // Truncate at word boundary

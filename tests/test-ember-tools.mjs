@@ -4,7 +4,7 @@
 import { WebSocket } from "ws";
 
 const TOKEN = "b3f88d0b-e226-486e-b0f6-80a5b98535cc";
-const WS_URL = `ws://localhost:3000/ws?token=${TOKEN}`;
+const WS_URL = `ws://localhost:3100/ws?token=${TOKEN}`;
 
 function connect(sessionId) {
   return new Promise((resolve, reject) => {
@@ -33,7 +33,7 @@ function connect(sessionId) {
 function sendAndWatch(ws, content, timeoutMs = 120_000) {
   return new Promise((resolve) => {
     const all = [];
-    let toolCalls = [];
+    const toolCalls = [];
     let textTokenCount = 0;
     let thinkingTokenCount = 0;
 
@@ -76,7 +76,7 @@ function sendAndWatch(ws, content, timeoutMs = 120_000) {
           process.stdout.write(`\n  >>> ERROR: ${msg.code} — ${msg.message}`);
           break;
         case "result":
-          process.stdout.write(`\n  >>> RESULT: session=${msg.sessionId?.slice(0,8)} interrupted=${msg.interrupted}`);
+          process.stdout.write(`\n  >>> RESULT: session=${msg.sessionId?.slice(0, 8)} interrupted=${msg.interrupted}`);
           clearTimeout(timer);
           ws.off("message", handler);
           resolve({ all, toolCalls, textTokenCount, thinkingTokenCount, timedOut: false, sessionId: msg.sessionId });
@@ -90,8 +90,17 @@ function sendAndWatch(ws, content, timeoutMs = 120_000) {
 }
 
 async function main() {
-  let pass = 0, fail = 0;
-  function check(d, c) { if (c) { console.log(`  PASS: ${d}`); pass++; } else { console.log(`  FAIL: ${d}`); fail++; } }
+  let pass = 0,
+    fail = 0;
+  function check(d, c) {
+    if (c) {
+      console.log(`  PASS: ${d}`);
+      pass++;
+    } else {
+      console.log(`  FAIL: ${d}`);
+      fail++;
+    }
+  }
 
   // Test 1: Trigger tool use with context-heavy prompt
   console.log("=== Test: Ember with tool-triggering prompt ===\n");
@@ -108,7 +117,7 @@ async function main() {
   console.log(`  Text tokens: ${r1.textTokenCount}, Thinking tokens: ${r1.thinkingTokenCount}`);
   console.log(`  Session: ${r1.sessionId}`);
 
-  const assistantMsg = r1.all.find(m => m.type === "assistant_message");
+  const assistantMsg = r1.all.find((m) => m.type === "assistant_message");
   if (assistantMsg) {
     console.log(`  Final response (first 200 chars): "${assistantMsg.content?.slice(0, 200)}"`);
   }
@@ -137,4 +146,7 @@ async function main() {
   process.exit(fail > 0 ? 1 : 0);
 }
 
-main().catch(err => { console.error("Fatal:", err); process.exit(1); });
+main().catch((err) => {
+  console.error("Fatal:", err);
+  process.exit(1);
+});

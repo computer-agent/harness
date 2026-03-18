@@ -1,11 +1,11 @@
 // Ember conversation flow test — tests multi-turn tool use
 // Usage: node web/test-ember-flow.mjs
-// Requires: backend running on :3000
+// Requires: backend running on :3100
 
 import { WebSocket } from "ws";
 
 const TOKEN = "b3f88d0b-e226-486e-b0f6-80a5b98535cc";
-const WS_URL = `ws://localhost:3000/ws?token=${TOKEN}`;
+const WS_URL = `ws://localhost:3100/ws?token=${TOKEN}`;
 const TIMEOUT = 120_000; // 2 minutes — tool use can be slow
 
 function connectAndSubscribe() {
@@ -43,7 +43,7 @@ function connectAndSubscribe() {
 }
 
 function sendAndCollect(ws, content, timeoutMs = TIMEOUT) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, _reject) => {
     const messages = [];
     const timer = setTimeout(() => {
       ws.off("message", handler);
@@ -102,7 +102,7 @@ async function main() {
 
   // Test 1: Simple greeting (may trigger MEMORY_READ + response)
   console.log("--- Test 1: Simple hello ---");
-  const { ws, messages: setupMsgs } = await connectAndSubscribe();
+  const { ws, messages: _setupMsgs } = await connectAndSubscribe();
   console.log("  Connected and subscribed\n");
 
   const msgs1 = await sendAndCollect(ws, "Hello! What's your name?");
@@ -136,12 +136,20 @@ async function main() {
   let pass = 0;
   let fail = 0;
   function check(desc, cond) {
-    if (cond) { console.log(`  PASS: ${desc}`); pass++; }
-    else { console.log(`  FAIL: ${desc}`); fail++; }
+    if (cond) {
+      console.log(`  PASS: ${desc}`);
+      pass++;
+    } else {
+      console.log(`  FAIL: ${desc}`);
+      fail++;
+    }
   }
 
   check("received result", hasResult1);
-  check("received assistant_message with content", hasAssistant1 && msgs1.find((m) => m.type === "assistant_message")?.content?.length > 0);
+  check(
+    "received assistant_message with content",
+    hasAssistant1 && msgs1.find((m) => m.type === "assistant_message")?.content?.length > 0,
+  );
   check("received text tokens", hasTokens1);
   check("got SDK session ID", !!sessionId);
 

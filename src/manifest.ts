@@ -28,10 +28,9 @@ const McpServerSchema = z
     args: z.array(z.string()).optional(),
     env: z.record(z.string(), z.string()).optional(),
   })
-  .refine(
-    (val) => (val.uri ? !val.command : !!val.command),
-    { message: "Exactly one of uri or command must be specified" },
-  );
+  .refine((val) => (val.uri ? !val.command : !!val.command), {
+    message: "Exactly one of uri or command must be specified",
+  });
 
 export type McpServerManifest = z.infer<typeof McpServerSchema>;
 

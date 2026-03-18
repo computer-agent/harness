@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint (Biome)
+        run: npx biome check
+
+      - name: Typecheck (root)
+        run: npx tsc --noEmit
+
+      - name: Typecheck (web)
+        run: cd web && npm ci && npx tsc -b
+
+      - name: Dead code (Knip)
+        run: npx knip
+
+      - name: Unit tests
+        run: npm run test:unit

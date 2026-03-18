@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { tool } from "@anthropic-ai/claude-agent-sdk";
-import { z } from "zod";
 import type { AgentCard } from "@a2a-js/sdk";
 import { AgentCardResolver, ClientFactory } from "@a2a-js/sdk/client";
+import { tool } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 import type { A2AAgentEntry } from "../config.js";
 
 const MAX_CARD_CACHE = 50;
@@ -13,8 +13,8 @@ export function createA2ATools(agents: Record<string, A2AAgentEntry>) {
 
   function cacheCard(url: string, card: AgentCard) {
     if (cardCache.size >= MAX_CARD_CACHE) {
-      const oldest = cardCache.keys().next().value!;
-      cardCache.delete(oldest);
+      const oldest = cardCache.keys().next().value;
+      if (oldest) cardCache.delete(oldest);
     }
     cardCache.set(url, card);
   }

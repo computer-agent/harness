@@ -46,11 +46,14 @@ describe("resolveAgent", () => {
   });
 
   it("throws AgentNotFoundError when agent directory does not exist", () => {
-    assert.throws(() => resolveAgent("nonexistent-agent"), (err: unknown) => {
-      assert.ok(err instanceof AgentNotFoundError);
-      assert.strictEqual(err.agentName, "nonexistent-agent");
-      return true;
-    });
+    assert.throws(
+      () => resolveAgent("nonexistent-agent"),
+      (err: unknown) => {
+        assert.ok(err instanceof AgentNotFoundError);
+        assert.strictEqual(err.agentName, "nonexistent-agent");
+        return true;
+      },
+    );
   });
 
   it("throws AgentNotFoundError when IDENTITY.md is missing", () => {
@@ -59,11 +62,14 @@ describe("resolveAgent", () => {
     mkdirSync(agentsDir, { recursive: true });
     // No IDENTITY.md written
 
-    assert.throws(() => resolveAgent(agentName), (err: unknown) => {
-      assert.ok(err instanceof AgentNotFoundError);
-      assert.strictEqual(err.agentName, agentName);
-      return true;
-    });
+    assert.throws(
+      () => resolveAgent(agentName),
+      (err: unknown) => {
+        assert.ok(err instanceof AgentNotFoundError);
+        assert.strictEqual(err.agentName, agentName);
+        return true;
+      },
+    );
   });
 
   it("creates workspace directory if it does not exist", () => {

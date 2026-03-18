@@ -20,15 +20,19 @@ interface CursorState {
 
 function wordBoundaryBack(line: string, col: number): number {
   let pos = col;
-  while (pos > 0 && !/\w/.test(line[pos - 1])) pos--;
-  while (pos > 0 && /\w/.test(line[pos - 1])) pos--;
+  // biome-ignore lint/style/noNonNullAssertion: bounded by pos > 0
+  while (pos > 0 && !/\w/.test(line[pos - 1]!)) pos--;
+  // biome-ignore lint/style/noNonNullAssertion: bounded by pos > 0
+  while (pos > 0 && /\w/.test(line[pos - 1]!)) pos--;
   return pos;
 }
 
 function wordBoundaryForward(line: string, col: number): number {
   let pos = col;
-  while (pos < line.length && /\w/.test(line[pos])) pos++;
-  while (pos < line.length && !/\w/.test(line[pos])) pos++;
+  // biome-ignore lint/style/noNonNullAssertion: bounded by pos < line.length
+  while (pos < line.length && /\w/.test(line[pos]!)) pos++;
+  // biome-ignore lint/style/noNonNullAssertion: bounded by pos < line.length
+  while (pos < line.length && !/\w/.test(line[pos]!)) pos++;
   return pos;
 }
 
@@ -55,8 +59,10 @@ export function MultilineInput({
       // Ctrl+J / Ctrl+Enter → insert newline
       if ((input === "j" && key.ctrl) || (key.return && key.ctrl)) {
         setState(({ lines, row, col }) => {
-          const before = lines[row].slice(0, col);
-          const after = lines[row].slice(col);
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          const before = lines[row]!.slice(0, col);
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          const after = lines[row]!.slice(col);
           const next = [...lines];
           next.splice(row, 1, before, after);
           return { lines: next, row: row + 1, col: 0 };
@@ -94,7 +100,8 @@ export function MultilineInput({
             const newLines = result.replace(/\n$/, "").split("\n");
             if (newLines.length === 0) newLines.push("");
             const lastRow = newLines.length - 1;
-            setState({ lines: newLines, row: lastRow, col: newLines[lastRow].length });
+            // biome-ignore lint/style/noNonNullAssertion: lastRow is a valid index
+            setState({ lines: newLines, row: lastRow, col: newLines[lastRow]!.length });
           } else {
             setState((prev) => ({ ...prev }));
           }
@@ -112,7 +119,8 @@ export function MultilineInput({
 
       // Ctrl-E → end of line
       if (input === "e" && key.ctrl) {
-        setState((s) => ({ ...s, col: s.lines[s.row].length }));
+        // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+        setState((s) => ({ ...s, col: s.lines[s.row]!.length }));
         return;
       }
 
@@ -121,8 +129,10 @@ export function MultilineInput({
       // Alt-B or Ctrl-Left or Alt-Left → word backward
       if ((input === "b" && key.meta) || (key.leftArrow && (key.ctrl || key.meta))) {
         setState(({ lines, row, col }) => {
-          if (col > 0) return { lines, row, col: wordBoundaryBack(lines[row], col) };
-          if (row > 0) return { lines, row: row - 1, col: lines[row - 1].length };
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          if (col > 0) return { lines, row, col: wordBoundaryBack(lines[row]!, col) };
+          // biome-ignore lint/style/noNonNullAssertion: row - 1 guarded by row > 0
+          if (row > 0) return { lines, row: row - 1, col: lines[row - 1]!.length };
           return { lines, row, col };
         });
         return;
@@ -131,7 +141,8 @@ export function MultilineInput({
       // Alt-F or Ctrl-Right or Alt-Right → word forward
       if ((input === "f" && key.meta) || (key.rightArrow && (key.ctrl || key.meta))) {
         setState(({ lines, row, col }) => {
-          if (col < lines[row].length) return { lines, row, col: wordBoundaryForward(lines[row], col) };
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          if (col < lines[row]!.length) return { lines, row, col: wordBoundaryForward(lines[row]!, col) };
           if (row < lines.length - 1) return { lines, row: row + 1, col: 0 };
           return { lines, row, col };
         });
@@ -143,15 +154,18 @@ export function MultilineInput({
       // Ctrl-D → delete character under cursor (forward delete)
       if (input === "d" && key.ctrl) {
         setState(({ lines, row, col }) => {
-          if (col < lines[row].length) {
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          if (col < lines[row]!.length) {
             const next = [...lines];
-            next[row] = lines[row].slice(0, col) + lines[row].slice(col + 1);
+            // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+            next[row] = lines[row]!.slice(0, col) + lines[row]!.slice(col + 1);
             return { lines: next, row, col };
           }
           // At end of line: merge with next line
           if (row < lines.length - 1) {
             const next = [...lines];
-            next[row] += lines[row + 1];
+            // biome-ignore lint/style/noNonNullAssertion: row + 1 guarded by row < lines.length - 1
+            next[row] += lines[row + 1]!;
             next.splice(row + 1, 1);
             return { lines: next, row, col };
           }
@@ -164,7 +178,8 @@ export function MultilineInput({
       if (input === "k" && key.ctrl) {
         setState(({ lines, row, col }) => {
           const next = [...lines];
-          next[row] = lines[row].slice(0, col);
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          next[row] = lines[row]!.slice(0, col);
           return { lines: next, row, col };
         });
         return;
@@ -174,7 +189,8 @@ export function MultilineInput({
       if (input === "u" && key.ctrl) {
         setState(({ lines, row, col }) => {
           const next = [...lines];
-          next[row] = lines[row].slice(col);
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          next[row] = lines[row]!.slice(col);
           return { lines: next, row, col: 0 };
         });
         return;
@@ -184,9 +200,11 @@ export function MultilineInput({
       if ((input === "w" && key.ctrl) || (key.meta && (key.backspace || key.delete))) {
         setState(({ lines, row, col }) => {
           if (col === 0) return { lines, row, col };
-          const boundary = wordBoundaryBack(lines[row], col);
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          const boundary = wordBoundaryBack(lines[row]!, col);
           const next = [...lines];
-          next[row] = lines[row].slice(0, boundary) + lines[row].slice(col);
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          next[row] = lines[row]!.slice(0, boundary) + lines[row]!.slice(col);
           return { lines: next, row, col: boundary };
         });
         return;
@@ -195,10 +213,13 @@ export function MultilineInput({
       // Alt-D → delete word forward
       if (input === "d" && key.meta) {
         setState(({ lines, row, col }) => {
-          if (col >= lines[row].length) return { lines, row, col };
-          const boundary = wordBoundaryForward(lines[row], col);
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          if (col >= lines[row]!.length) return { lines, row, col };
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          const boundary = wordBoundaryForward(lines[row]!, col);
           const next = [...lines];
-          next[row] = lines[row].slice(0, col) + lines[row].slice(boundary);
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          next[row] = lines[row]!.slice(0, col) + lines[row]!.slice(boundary);
           return { lines: next, row, col };
         });
         return;
@@ -207,13 +228,18 @@ export function MultilineInput({
       // Ctrl-T → transpose characters before cursor
       if (input === "t" && key.ctrl) {
         setState(({ lines, row, col }) => {
-          if (col === 0 || lines[row].length < 2) return { lines, row, col };
-          const pos = col === lines[row].length ? col - 1 : col;
-          const chars = lines[row].split("");
-          [chars[pos - 1], chars[pos]] = [chars[pos], chars[pos - 1]];
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          if (col === 0 || lines[row]!.length < 2) return { lines, row, col };
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          const pos = col === lines[row]!.length ? col - 1 : col;
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          const chars = lines[row]!.split("");
+          // biome-ignore lint/style/noNonNullAssertion: pos and pos-1 are valid character indices
+          [chars[pos - 1], chars[pos]] = [chars[pos]!, chars[pos - 1]!];
           const next = [...lines];
           next[row] = chars.join("");
-          return { lines: next, row, col: Math.min(pos + 1, next[row].length) };
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into next
+          return { lines: next, row, col: Math.min(pos + 1, next[row]!.length) };
         });
         return;
       }
@@ -235,7 +261,8 @@ export function MultilineInput({
       if (key.leftArrow) {
         setState(({ lines, row, col }) => {
           if (col > 0) return { lines, row, col: col - 1 };
-          if (row > 0) return { lines, row: row - 1, col: lines[row - 1].length };
+          // biome-ignore lint/style/noNonNullAssertion: row - 1 guarded by row > 0
+          if (row > 0) return { lines, row: row - 1, col: lines[row - 1]!.length };
           return { lines, row, col };
         });
         return;
@@ -244,7 +271,8 @@ export function MultilineInput({
       // Right arrow — wrap to start of next line
       if (key.rightArrow) {
         setState(({ lines, row, col }) => {
-          if (col < lines[row].length) return { lines, row, col: col + 1 };
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          if (col < lines[row]!.length) return { lines, row, col: col + 1 };
           if (row < lines.length - 1) return { lines, row: row + 1, col: 0 };
           return { lines, row, col };
         });
@@ -259,7 +287,8 @@ export function MultilineInput({
           setState(({ lines, row, col }) => ({
             lines,
             row: row - 1,
-            col: Math.min(col, lines[row - 1].length),
+            // biome-ignore lint/style/noNonNullAssertion: row - 1 guarded by s.row > 0
+            col: Math.min(col, lines[row - 1]!.length),
           }));
         } else if (history.length > 0) {
           // On first row: navigate history
@@ -270,7 +299,8 @@ export function MultilineInput({
             draftRef.current = s.lines.join("\n");
           }
           setHistoryIndex(nextIdx);
-          const entry = history[history.length - 1 - nextIdx];
+          // biome-ignore lint/style/noNonNullAssertion: nextIdx is within bounds (checked above)
+          const entry = history[history.length - 1 - nextIdx]!;
           const newLines = entry.split("\n");
           setState({
             lines: newLines,
@@ -289,7 +319,8 @@ export function MultilineInput({
           setState(({ lines, row, col }) => ({
             lines,
             row: row + 1,
-            col: Math.min(col, lines[row + 1].length),
+            // biome-ignore lint/style/noNonNullAssertion: row + 1 guarded by s.row < s.lines.length - 1
+            col: Math.min(col, lines[row + 1]!.length),
           }));
         } else if (historyIndex >= 0) {
           // On last row and in history mode: navigate forward
@@ -302,17 +333,20 @@ export function MultilineInput({
             setState({
               lines: newLines,
               row: lastRow,
-              col: newLines[lastRow].length,
+              // biome-ignore lint/style/noNonNullAssertion: lastRow is a valid index
+              col: newLines[lastRow]!.length,
             });
           } else {
             setHistoryIndex(nextIdx);
-            const entry = history[history.length - 1 - nextIdx];
+            // biome-ignore lint/style/noNonNullAssertion: nextIdx is within bounds
+            const entry = history[history.length - 1 - nextIdx]!;
             const newLines = entry.split("\n");
             const lastRow = newLines.length - 1;
             setState({
               lines: newLines,
               row: lastRow,
-              col: newLines[lastRow].length,
+              // biome-ignore lint/style/noNonNullAssertion: lastRow is a valid index
+              col: newLines[lastRow]!.length,
             });
           }
         }
@@ -329,13 +363,16 @@ export function MultilineInput({
         setState(({ lines, row, col }) => {
           if (col > 0) {
             const next = [...lines];
-            next[row] = lines[row].slice(0, col - 1) + lines[row].slice(col);
+            // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+            next[row] = lines[row]!.slice(0, col - 1) + lines[row]!.slice(col);
             return { lines: next, row, col: col - 1 };
           }
           if (row > 0) {
-            const newCol = lines[row - 1].length;
+            // biome-ignore lint/style/noNonNullAssertion: row - 1 guarded by row > 0
+            const newCol = lines[row - 1]!.length;
             const next = [...lines];
-            next[row - 1] += lines[row];
+            // biome-ignore lint/style/noNonNullAssertion: row and row - 1 are valid indices
+            next[row - 1] += lines[row]!;
             next.splice(row, 1);
             return { lines: next, row: row - 1, col: newCol };
           }
@@ -351,15 +388,20 @@ export function MultilineInput({
           const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
           if (normalized.includes("\n")) {
             const parts = normalized.split("\n");
-            const before = lines[row].slice(0, col);
-            const after = lines[row].slice(col);
+            // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+            const before = lines[row]!.slice(0, col);
+            // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+            const after = lines[row]!.slice(col);
             const next = [...lines];
-            next.splice(row, 1, before + parts[0], ...parts.slice(1, -1), parts[parts.length - 1] + after);
+            // biome-ignore lint/style/noNonNullAssertion: parts[0] and parts[parts.length - 1] exist from split
+            next.splice(row, 1, before + parts[0]!, ...parts.slice(1, -1), parts[parts.length - 1]! + after);
             const newRow = row + parts.length - 1;
-            return { lines: next, row: newRow, col: parts[parts.length - 1].length };
+            // biome-ignore lint/style/noNonNullAssertion: parts has at least 2 elements (contains \n)
+            return { lines: next, row: newRow, col: parts[parts.length - 1]!.length };
           }
           const next = [...lines];
-          next[row] = lines[row].slice(0, col) + input + lines[row].slice(col);
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          next[row] = lines[row]!.slice(0, col) + input + lines[row]!.slice(col);
           return { lines: next, row, col: col + input.length };
         });
       }
@@ -382,19 +424,23 @@ export function MultilineInput({
       }
       // End: \x1b[F, \x1bOF, \x1b[4~, \x1b[8~
       else if (seq === "\x1b[F" || seq === "\x1bOF" || seq === "\x1b[4~" || seq === "\x1b[8~") {
-        setState((s) => ({ ...s, col: s.lines[s.row].length }));
+        // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+        setState((s) => ({ ...s, col: s.lines[s.row]!.length }));
       }
       // Delete: \x1b[3~
       else if (seq === "\x1b[3~") {
         setState(({ lines, row, col }) => {
-          if (col < lines[row].length) {
+          // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+          if (col < lines[row]!.length) {
             const next = [...lines];
-            next[row] = lines[row].slice(0, col) + lines[row].slice(col + 1);
+            // biome-ignore lint/style/noNonNullAssertion: row is a valid index into lines
+            next[row] = lines[row]!.slice(0, col) + lines[row]!.slice(col + 1);
             return { lines: next, row, col };
           }
           if (row < lines.length - 1) {
             const next = [...lines];
-            next[row] += lines[row + 1];
+            // biome-ignore lint/style/noNonNullAssertion: row + 1 guarded by row < lines.length - 1
+            next[row] += lines[row + 1]!;
             next.splice(row + 1, 1);
             return { lines: next, row, col };
           }
@@ -419,7 +465,8 @@ export function MultilineInput({
   const visualRows: { text: string; hasCursor: boolean; cursorCol: number }[] = [];
 
   for (let i = 0; i < state.lines.length; i++) {
-    const line = state.lines[i];
+    // biome-ignore lint/style/noNonNullAssertion: i bounded by loop
+    const line = state.lines[i]!;
     const isCurrentLine = i === state.row && !isDisabled;
 
     if (!isCurrentLine) {
@@ -454,7 +501,8 @@ export function MultilineInput({
 
     for (let j = 0; j < wrapped.length; j++) {
       visualRows.push({
-        text: wrapped[j],
+        // biome-ignore lint/style/noNonNullAssertion: j bounded by loop
+        text: wrapped[j]!,
         hasCursor: j === cursorVRow,
         cursorCol: j === cursorVRow ? cursorVCol : 0,
       });

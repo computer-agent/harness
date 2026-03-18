@@ -1,4 +1,4 @@
-import { watch, type FSWatcher } from "node:fs";
+import { type FSWatcher, watch } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { Logger } from "./logger.js";
 
@@ -28,7 +28,7 @@ export class FileWatcher {
   async start(): Promise<void> {
     // Watch agents directory recursively for IDENTITY.md changes
     try {
-      const agentsWatcher = watch(this.agentsDir, { recursive: true }, (eventType, filename) => {
+      const agentsWatcher = watch(this.agentsDir, { recursive: true }, (_eventType, filename) => {
         if (this.stopped) return;
         if (!filename) return;
         // Only react to IDENTITY.md changes or directory-level changes
@@ -65,7 +65,7 @@ export class FileWatcher {
   private async watchFile(filePath: string, key: string, callback: () => Promise<void>): Promise<void> {
     try {
       await stat(filePath); // verify file exists
-      const watcher = watch(filePath, (eventType) => {
+      const watcher = watch(filePath, (_eventType) => {
         if (this.stopped) return;
         this.debounce(key, callback);
       });
@@ -80,13 +80,16 @@ export class FileWatcher {
     const existing = this.debounceTimers.get(key);
     if (existing) clearTimeout(existing);
 
-    this.debounceTimers.set(key, setTimeout(async () => {
-      this.debounceTimers.delete(key);
-      try {
-        await callback();
-      } catch (err) {
-        this.logger?.error("server", "watcher.callback_error", `Watcher callback failed for ${key}: ${err}`);
-      }
-    }, this.debounceMs));
+    this.debounceTimers.set(
+      key,
+      setTimeout(async () => {
+        this.debounceTimers.delete(key);
+        try {
+          await callback();
+        } catch (err) {
+          this.logger?.error("server", "watcher.callback_error", `Watcher callback failed for ${key}: ${err}`);
+        }
+      }, this.debounceMs),
+    );
   }
 }

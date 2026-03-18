@@ -39,7 +39,7 @@ function getFlag(name: string): boolean {
 function getFlagValue(name: string): string | null {
   const idx = args.indexOf(`--${name}`);
   if (idx === -1 || idx + 1 >= args.length) return null;
-  const val = args[idx + 1];
+  const val = args[idx + 1] ?? "";
   if (val.startsWith("--")) return null;
   return val;
 }
@@ -198,7 +198,7 @@ if (getFlag("card")) {
 // --- Flag: --serve (server mode) ---
 
 if (getFlag("serve")) {
-  const port = parseInt(getFlagValue("port") ?? "3000", 10);
+  const port = parseInt(getFlagValue("port") ?? "3100", 10);
   const host = getFlagValue("host") ?? "0.0.0.0";
 
   const { loadAccessConfig } = await import("./access.js");
@@ -321,7 +321,9 @@ if (getFlag("serve")) {
 
     if (isResume) {
       const resumeArg =
-        resumeIdx + 1 < args.length && !args[resumeIdx + 1].startsWith("--") ? args[resumeIdx + 1] : null;
+        resumeIdx + 1 < args.length && !(args[resumeIdx + 1] ?? "").startsWith("--")
+          ? (args[resumeIdx + 1] ?? null)
+          : null;
 
       if (resumeArg) {
         const byId = await loadSession(sessionDirs, resumeArg);
@@ -347,8 +349,8 @@ if (getFlag("serve")) {
           console.error("No sessions found.");
           process.exit(1);
         }
-        initialSessionId = sessions[0].id;
-        initialSessionName = sessions[0].name;
+        initialSessionId = sessions[0]?.id ?? null;
+        initialSessionName = sessions[0]?.name ?? null;
       }
     }
 
