@@ -12,6 +12,8 @@ import {
 import type { AgentContext } from "./agent-context.js";
 import { createAgentRegistry } from "./agents/index.js";
 import type { HarnessConfig } from "./config.js";
+import { CredentialStore, type CredentialsConfig } from "./credentials.js";
+import { EgressFilter } from "./egress-proxy.js";
 import type { Logger } from "./logger.js";
 import { type AgentManifest, loadAgentManifest, type McpServerManifest } from "./manifest.js";
 import type { RemoteSandboxPolicy } from "./sandbox.js";
@@ -184,6 +186,8 @@ function buildCanUseTool(
   onToolApproval?: (toolId: string, toolName: string, input: Record<string, unknown>) => Promise<boolean>,
   sandboxPolicy?: RemoteSandboxPolicy,
   logger?: Logger,
+  userToolsDeny?: string[],
+  toolOperations?: Record<string, { allow?: string[]; deny?: string[] }>,
 ): CanUseTool {
   // B2: Loop detection — per-file edit counts
   const editCounts = new Map<string, number>();
@@ -207,6 +211,50 @@ function buildCanUseTool(
         });
       }
       return { behavior: "deny", message: "Shell execution is not allowed for this session" };
+    }
+
+    // Layer 3: Per-user tool deny (from access.yaml tools_deny)
+    if (userToolsDeny?.length) {
+      // toolName is like "mcp__agent-shell__shell_exec" — extract the domain suffix
+      const toolSuffix = toolName.split("__").pop() ?? toolName;
+      for (const denied of userToolsDeny) {
+        // Match full tool name or just the tool suffix
+        if (toolName === denied || toolSuffix === denied || toolName.includes(`-${denied}__`)) {
+          if (logger) {
+            logger.warn("tool", "tool.denied.user", `Tool denied by user access policy: ${toolName}`, {
+              details: { tool: toolName, denied },
+            });
+          }
+          return { behavior: "deny", message: `Tool "${toolSuffix}" is not allowed for your account` };
+        }
+      }
+    }
+
+    // Layer 4: Agent-level tool operation restrictions (from frontmatter toolOperations)
+    if (toolOperations) {
+      for (const [pattern, ops] of Object.entries(toolOperations)) {
+        if (!toolName.includes(pattern)) continue;
+        const inp = input as Record<string, unknown>;
+        const operation = (inp.operation ?? inp.method ?? inp.action ?? "") as string;
+        if (!operation) continue;
+
+        if (ops.allow && !ops.allow.includes(operation)) {
+          if (logger) {
+            logger.warn("tool", "tool.denied.operation", `Operation "${operation}" not in allowlist for ${pattern}`, {
+              details: { tool: toolName, operation, allowed: ops.allow },
+            });
+          }
+          return { behavior: "deny", message: `Operation "${operation}" is not allowed for this agent` };
+        }
+        if (ops.deny?.includes(operation)) {
+          if (logger) {
+            logger.warn("tool", "tool.denied.operation", `Operation "${operation}" denied for ${pattern}`, {
+              details: { tool: toolName, operation, denied: ops.deny },
+            });
+          }
+          return { behavior: "deny", message: `Operation "${operation}" is not allowed for this agent` };
+        }
+      }
     }
 
     // AskUserQuestion handling
@@ -285,9 +333,13 @@ export function buildOptions(
     systemPrompt: string;
     cwd?: string;
     agentEnv?: Record<string, string>;
+    credentialsConfig?: CredentialsConfig;
+    allowedDomains?: string[];
     toolFilter?: ToolFilter;
+    toolOperations?: Record<string, { allow?: string[]; deny?: string[] }>;
     mcpConfigs?: McpServerManifest[];
     isRemoteSession?: boolean;
+    userToolsDeny?: string[];
     onInstructionsLoaded?: (filePath: string, memoryType: string, loadReason: string) => void;
     onAskUserQuestion?: (input: Record<string, unknown>) => Promise<Record<string, string> | null>;
     onToolApproval?: (toolId: string, toolName: string, input: Record<string, unknown>) => Promise<boolean>;
@@ -305,19 +357,34 @@ export function buildOptions(
     opts.onToolApproval,
     opts.sandboxPolicy,
     opts.logger,
+    opts.userToolsDeny,
+    opts.toolOperations,
   );
   const cwd = opts.cwd ?? ctx.workspaceDir;
   const agentEnv = opts.agentEnv ?? {};
 
-  const harnessServers = createAgentServers(ctx, config, cwd, agentEnv, opts.toolFilter, opts.sandboxPolicy);
+  // Build credential store — strict mode when frontmatter has credentials block
+  const credentialStore = new CredentialStore(agentEnv, opts.credentialsConfig, opts.logger);
+
+  // Build egress filter — active when frontmatter declares allowedDomains
+  const egressFilter = opts.allowedDomains?.length ? new EgressFilter(opts.allowedDomains) : undefined;
+
+  const harnessServers = createAgentServers(
+    ctx,
+    config,
+    cwd,
+    credentialStore,
+    opts.toolFilter,
+    opts.sandboxPolicy,
+    egressFilter,
+  );
   const mcpServers = opts.mcpConfigs?.length
     ? mergeExternalMcpServers(
         harnessServers,
         opts.mcpConfigs,
         `${ctx.name}-`,
-        agentEnv,
+        credentialStore,
         opts.isRemoteSession ?? false,
-        opts.sandboxPolicy,
         opts.logger,
       )
     : harnessServers;

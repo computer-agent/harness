@@ -3,12 +3,15 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { buildShellEnv } from "../env-safety.js";
 import { buildPerCommandBwrapArgs, type RemoteSandboxPolicy } from "../sandbox.js";
 
 const exec = promisify(execFile);
 const DEFAULT_TIMEOUT = 30_000;
 
 export function createShellTools(defaultCwd: string, agentEnv: Record<string, string> = {}) {
+  const safeEnv = buildShellEnv(agentEnv);
+
   const shellExec = tool(
     "shell_exec",
     "Execute a shell command. Runs in the current directory by default. Use for running tests, compiling, git operations, deployments — anything you'd do in a terminal.",
@@ -28,7 +31,7 @@ export function createShellTools(defaultCwd: string, agentEnv: Record<string, st
           cwd: workDir,
           timeout,
           maxBuffer: 1024 * 1024,
-          env: { ...process.env, ...agentEnv },
+          env: safeEnv,
         });
 
         let output = "";

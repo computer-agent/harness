@@ -79,10 +79,27 @@ describe("isToolEnabled", () => {
   });
 
   it("handles every tool domain", () => {
-    const domains = ["memory", "workspace", "web", "shell", "tasks", "introspection", "models"] as const;
+    const domains = [
+      "memory",
+      "workspace",
+      "web",
+      "shell",
+      "tasks",
+      "introspection",
+      "models",
+      "a2a",
+      "scratchpad",
+    ] as const;
     for (const domain of domains) {
       assert.strictEqual(isToolEnabled(domain, allEnabledConfig), true);
     }
+  });
+
+  it("deny filter blocks a2a domain", () => {
+    const filter: ToolFilter = { deny: ["shell", "a2a"] };
+    assert.strictEqual(isToolEnabled("a2a", allEnabledConfig, filter), false);
+    assert.strictEqual(isToolEnabled("shell", allEnabledConfig, filter), false);
+    assert.strictEqual(isToolEnabled("memory", allEnabledConfig, filter), true);
   });
 
   it("returns false when global config disables a domain, no filter", () => {

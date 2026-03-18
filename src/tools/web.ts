@@ -1,12 +1,12 @@
-import { lookup } from "node:dns/promises";
 import { readFileSync } from "node:fs";
-import { isIP } from "node:net";
 import { join } from "node:path";
 import { query as sdkQuery, tool } from "@anthropic-ai/claude-agent-sdk";
 import { Readability } from "@mozilla/readability";
 import { JSDOM, VirtualConsole } from "jsdom";
 import TurndownService from "turndown";
 import { z } from "zod";
+import type { EgressFilter } from "../egress-proxy.js";
+import { validateUrl } from "../url-safety.js";
 
 const PKG_VERSION = (() => {
   try {
@@ -26,31 +26,6 @@ function createVirtualConsole(): VirtualConsole {
     console.error(err);
   });
   return vc;
-}
-
-const BLOCKED_RANGES = [
-  /^127\./,
-  /^10\./,
-  /^172\.(1[6-9]|2\d|3[01])\./,
-  /^192\.168\./,
-  /^169\.254\./,
-  /^0\./,
-  /^::1$/,
-  /^fc/,
-  /^fd/,
-  /^fe80/,
-];
-
-async function validateUrl(url: string): Promise<void> {
-  const parsed = new URL(url);
-  const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
-  if (hostname === "localhost" || hostname === "::1") {
-    throw new Error("Requests to localhost are not allowed");
-  }
-  const ip = isIP(hostname) ? hostname : (await lookup(hostname)).address;
-  if (BLOCKED_RANGES.some((r) => r.test(ip))) {
-    throw new Error("Requests to private/internal networks are not allowed");
-  }
 }
 
 async function extractRelevantContent(markdown: string, userQuery: string, model: string): Promise<string> {
@@ -74,7 +49,11 @@ async function extractRelevantContent(markdown: string, userQuery: string, model
   return resultText || markdown;
 }
 
-export function createWebTools(webConfig?: { extraction_model?: string }, agentEnv: Record<string, string> = {}) {
+export function createWebTools(
+  webConfig?: { extraction_model?: string },
+  agentEnv: Record<string, string> = {},
+  egressFilter?: EgressFilter,
+) {
   const extractionModel = webConfig?.extraction_model;
 
   const webSearch = tool(
@@ -85,7 +64,7 @@ export function createWebTools(webConfig?: { extraction_model?: string }, agentE
       count: z.number().optional().describe("Number of results to return (default 5, max 20)"),
     },
     async ({ query, count = 5 }) => {
-      const apiKey = agentEnv.BRAVE_API_KEY ?? process.env.BRAVE_API_KEY;
+      const apiKey = agentEnv.BRAVE_API_KEY;
       if (!apiKey) {
         return {
           content: [{ type: "text" as const, text: "BRAVE_API_KEY not set. Cannot perform web search." }],
@@ -95,6 +74,15 @@ export function createWebTools(webConfig?: { extraction_model?: string }, agentE
       const url = new URL("https://api.search.brave.com/res/v1/web/search");
       url.searchParams.set("q", query);
       url.searchParams.set("count", String(Math.min(count, 20)));
+
+      // Egress filter: check domain allowlist (when configured)
+      if (egressFilter) {
+        try {
+          egressFilter.validate(url.toString());
+        } catch (err: any) {
+          return { content: [{ type: "text" as const, text: err.message }] };
+        }
+      }
 
       const res = await fetch(url.toString(), {
         headers: { "X-Subscription-Token": apiKey, Accept: "application/json" },
@@ -141,6 +129,15 @@ export function createWebTools(webConfig?: { extraction_model?: string }, agentE
         await validateUrl(url);
       } catch (err: any) {
         return { content: [{ type: "text" as const, text: err.message }] };
+      }
+
+      // Egress filter: check domain allowlist (when configured)
+      if (egressFilter) {
+        try {
+          egressFilter.validate(url);
+        } catch (err: any) {
+          return { content: [{ type: "text" as const, text: err.message }] };
+        }
       }
 
       const res = await fetch(url, {

@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentContext } from "./agent-context.js";
+import { buildShellEnv } from "./env-safety.js";
 
 interface SandboxMount {
   path: string;
@@ -120,8 +121,9 @@ function buildBwrapArgs(ctx: AgentContext, config: SandboxConfig, agentEnv?: Rec
   // Session state (read-write)
   args.push(...rwBind(ctx.stateDir));
 
-  // SDK auth + sessions (read-write)
-  args.push(...rwBind(join(home, ".claude")));
+  // SDK auth (read-only — sandbox should not modify credential state)
+  args.push(...roBind(join(home, ".claude")));
+  // SDK session state file (read-write — SDK needs to persist session info)
   args.push(...rwBind(join(home, ".claude.json")));
 
   // Agent workspace (read-write)
@@ -177,11 +179,13 @@ function buildBwrapArgs(ctx: AgentContext, config: SandboxConfig, agentEnv?: Rec
     }
   }
 
-  // Inject decrypted agent .env values (decrypted before sandbox gate)
-  // DOTENV_PRIVATE_KEY is intentionally excluded — the sandbox gets decrypted values only
+  // Inject agent env values through buildShellEnv — only safe system vars + agent secrets
+  // (no process.env secrets like ANTHROPIC_API_KEY)
   if (agentEnv) {
-    for (const [key, val] of Object.entries(agentEnv)) {
-      if (key === "DOTENV_PRIVATE_KEY") continue;
+    const safeEnv = buildShellEnv(agentEnv);
+    for (const [key, val] of Object.entries(safeEnv)) {
+      // Skip keys already set above (env whitelist, TZ, HARNESS_SANDBOXED)
+      if (envWhitelist.includes(key) || key === "TZ" || key === "HARNESS_SANDBOXED") continue;
       args.push("--setenv", key, val);
     }
   }
@@ -290,10 +294,13 @@ export function buildPerCommandBwrapArgs(
     if (val !== undefined) args.push("--setenv", key, val);
   }
 
-  // Inject agent env (excluding private keys)
+  // Inject agent env values through buildShellEnv — only safe system vars + agent secrets
+  // (no process.env secrets like ANTHROPIC_API_KEY)
   if (agentEnv) {
-    for (const [key, val] of Object.entries(agentEnv)) {
-      if (key === "DOTENV_PRIVATE_KEY") continue;
+    const safeEnv = buildShellEnv(agentEnv);
+    for (const [key, val] of Object.entries(safeEnv)) {
+      // Skip keys already set above (HOME, PATH, TERM, TZ, HARNESS_SANDBOXED)
+      if (["HOME", "PATH", "TERM", "TZ", "HARNESS_SANDBOXED"].includes(key)) continue;
       args.push("--setenv", key, val);
     }
   }

@@ -10,6 +10,7 @@ export interface AccessUser {
   name: string;
   agents: string[] | "*"; // "*" = all agents
   budget: BudgetConfig;
+  toolsDeny: string[]; // Tool names this user cannot use (e.g., ["shell_exec"])
 }
 
 export interface AccessConfig {
@@ -21,6 +22,7 @@ export interface AccessEntry {
   name: string;
   agents: string[] | "*";
   budget: BudgetConfig;
+  toolsDeny: string[];
 }
 
 /**
@@ -79,6 +81,7 @@ export function loadAccessConfig(): AccessConfig {
         name: string;
         agents: string[] | "*";
         budget?: unknown;
+        tools_deny?: string[];
       }>;
     };
     const users: AccessEntry[] = [];
@@ -90,6 +93,7 @@ export function loadAccessConfig(): AccessConfig {
             name: entry.name,
             agents: entry.agents,
             budget: parseBudget(entry.budget),
+            toolsDeny: Array.isArray(entry.tools_deny) ? entry.tools_deny : [],
           });
         }
       }
@@ -109,7 +113,7 @@ export function lookupUser(token: string, access: AccessConfig): AccessUser | nu
   const incomingHash = hashToken(token);
   for (const entry of access.users) {
     if (safeCompare(incomingHash, entry.tokenHash)) {
-      return { name: entry.name, agents: entry.agents, budget: entry.budget };
+      return { name: entry.name, agents: entry.agents, budget: entry.budget, toolsDeny: entry.toolsDeny };
     }
   }
   return null;

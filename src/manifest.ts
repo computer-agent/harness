@@ -5,7 +5,17 @@ import { z } from "zod";
 
 // --- Tool domain names (must match keys in HarnessConfig.tools) ---
 
-export const TOOL_DOMAINS = ["memory", "workspace", "web", "shell", "tasks", "introspection", "models"] as const;
+export const TOOL_DOMAINS = [
+  "memory",
+  "workspace",
+  "web",
+  "shell",
+  "tasks",
+  "introspection",
+  "models",
+  "a2a",
+  "scratchpad",
+] as const;
 
 export type ToolDomain = (typeof TOOL_DOMAINS)[number];
 
@@ -45,6 +55,22 @@ const SandboxSchema = z.object({
       }),
     )
     .optional(),
+  allowedDomains: z.array(z.string()).optional(),
+});
+
+const CredentialGrantSchema = z.object({
+  keys: z.array(z.string()),
+  tools: z.array(z.enum(TOOL_DOMAINS)),
+  approval: z.enum(["required"]).optional(),
+});
+
+const CredentialsSchema = z.object({
+  grants: z.record(z.string(), CredentialGrantSchema),
+});
+
+const ToolOperationSchema = z.object({
+  allow: z.array(z.string()).optional(),
+  deny: z.array(z.string()).optional(),
 });
 
 const SubAgentSchema = z.object({
@@ -75,6 +101,12 @@ export const AgentFrontmatterSchema = z.object({
 
   // Sandbox
   sandbox: SandboxSchema.optional(),
+
+  // Credentials
+  credentials: CredentialsSchema.optional(),
+
+  // Tool operation restrictions (e.g., restrict billing agent to read-only operations)
+  toolOperations: z.record(z.string(), ToolOperationSchema).optional(),
 
   // Sub-agents
   agents: z.record(z.string(), SubAgentSchema).optional(),

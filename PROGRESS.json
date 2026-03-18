@@ -1,36 +1,157 @@
 {
-  "task": "Fix CodeQL security alerts",
-  "created": "2026-03-17",
-  "updatedAt": "2026-03-17",
+  "wave": "Wave 2: Credential Architecture + Egress + Headless",
+  "started": "2026-03-18",
+  "updatedAt": "2026-03-18",
   "status": "complete",
   "items": [
     {
-      "name": "Path injection: add validation module",
+      "id": "W2-T01",
+      "name": "CredentialStore class + frontmatter schema",
       "status": "completed",
-      "files": [
-        "src/path-safety.ts",
-        "src/sessions.ts",
-        "src/message-store.ts",
-        "src/agent-context.ts",
-        "src/privacy.ts"
-      ],
+      "files": ["src/credentials.ts", "src/manifest.ts"],
       "validation": [
-        "All path construction uses validated inputs ✓",
-        "`npx tsc --noEmit` exits 0 ✓",
-        "83/83 tests pass ✓"
+        "CredentialStore.resolveFlat(domain) returns only granted keys in strict mode ✓",
+        "Legacy mode (no credentials config) returns all keys ✓",
+        "CredentialGrant, CredentialsSchema, ToolOperationSchema added to manifest.ts ✓",
+        "allowedDomains added to SandboxSchema ✓"
       ]
     },
     {
-      "name": "Missing rate limiting: add @fastify/rate-limit",
+      "id": "W2-T02",
+      "name": "Wire CredentialStore into createAgentServers",
       "status": "completed",
-      "files": ["src/serve.ts", "package.json"],
-      "validation": ["All HTTP routes rate-limited via @fastify/rate-limit plugin ✓", "`npx tsc --noEmit` exits 0 ✓"]
+      "files": ["src/tools/index.ts", "src/agent.ts"],
+      "validation": [
+        "createAgentServers accepts CredentialStore instead of raw agentEnv ✓",
+        "Web tools receive store.resolveFlat('web') ✓",
+        "Shell tools receive store.toFlatEnv() (filtered by buildShellEnv) ✓",
+        "mergeExternalMcpServers uses credentialStore.toFlatEnv() for env resolution ✓"
+      ]
     },
     {
-      "name": "Incomplete sanitization: fix tag stripping",
+      "id": "W2-T03",
+      "name": "Audit logging on credential resolution",
       "status": "completed",
-      "files": ["src/sessions.ts"],
-      "validation": ["Tag stripping loops until no tags remain ✓"]
+      "files": ["src/credentials.ts"],
+      "validation": [
+        "CredentialStore.resolveFlat logs domain, grants, and keys when logger provided ✓",
+        "Uses LogCategory 'tool' with event 'credentials.resolved' ✓"
+      ]
+    },
+    {
+      "id": "W2-T04",
+      "name": "Egress proxy (domain allowlist filter)",
+      "status": "completed",
+      "files": ["src/egress-proxy.ts", "src/manifest.ts"],
+      "validation": [
+        "EgressFilter validates URLs against allowlist ✓",
+        "Supports exact match and wildcard (*.domain.com) patterns ✓",
+        "Throws on non-allowlisted domains ✓",
+        "Case-insensitive matching ✓"
+      ]
+    },
+    {
+      "id": "W2-T05",
+      "name": "Wire egress proxy into web and A2A tools",
+      "status": "completed",
+      "files": ["src/tools/web.ts", "src/tools/a2a.ts"],
+      "validation": [
+        "web_fetch validates against egress filter before fetch ✓",
+        "web_search validates against egress filter before fetch ✓",
+        "A2A tools validate against egress filter (even for registered URLs) ✓",
+        "EgressFilter is optional — tools work without it ✓"
+      ]
+    },
+    {
+      "id": "W2-T06",
+      "name": "Headless `run` subcommand",
+      "status": "completed",
+      "files": ["src/index.tsx"],
+      "validation": [
+        "mastersof-ai run <agent> 'message' subcommand implemented ✓",
+        "Structured exit codes (0=success, 1=error) ✓",
+        "Passes credentialsConfig, allowedDomains, toolOperations through ✓"
+      ]
+    },
+    {
+      "id": "W2-T07",
+      "name": "runs.jsonl logging in run mode",
+      "status": "completed",
+      "files": ["src/index.tsx"],
+      "validation": [
+        "Appends JSON line to ~/.mastersof-ai/state/{agent}/runs.jsonl ✓",
+        "Record contains timestamp, agent, message, exitCode, durationMs ✓",
+        "Best-effort logging (failure doesn't block run) ✓"
+      ]
+    },
+    {
+      "id": "W2-T08",
+      "name": "Per-user tool deny in access.yaml",
+      "status": "completed",
+      "files": ["src/access.ts", "src/agent.ts"],
+      "validation": [
+        "tools_deny field added to AccessEntry and AccessUser ✓",
+        "Parsed from access.yaml in loadAccessConfig ✓",
+        "canUseTool Layer 3 checks userToolsDeny ✓",
+        "Matches full tool name, suffix, or domain segment ✓"
+      ]
+    },
+    {
+      "id": "W2-T09",
+      "name": "canUseTool operation allowlist",
+      "status": "completed",
+      "files": ["src/manifest.ts", "src/agent.ts"],
+      "validation": [
+        "toolOperations schema added to AgentFrontmatterSchema ✓",
+        "canUseTool Layer 4 checks operation against allow/deny lists ✓",
+        "Extracts operation from input.operation/method/action ✓",
+        "Passed through buildOptions from frontmatter ✓"
+      ]
+    },
+    {
+      "id": "W2-T10",
+      "name": "Restrict external MCP in serve mode",
+      "status": "completed",
+      "files": ["src/tools/index.ts"],
+      "validation": [
+        "Command-based MCP servers blocked in ALL serve mode sessions ✓",
+        "Previous check (only without sandbox) replaced with unconditional block ✓",
+        "URI-based MCP servers still allowed in serve mode ✓",
+        "sandboxPolicy param removed from mergeExternalMcpServers ✓"
+      ]
+    },
+    {
+      "id": "W2-T11",
+      "name": "credentials migrate CLI command",
+      "status": "completed",
+      "files": ["src/index.tsx"],
+      "validation": [
+        "mastersof-ai credentials migrate [agent] subcommand implemented ✓",
+        "Reads .env keys, outputs YAML credentials block ✓",
+        "Excludes DOTENV_PRIVATE_KEY ✓"
+      ]
+    },
+    {
+      "id": "W2-T12",
+      "name": "Docs for credentials and agent authoring",
+      "status": "completed",
+      "files": ["docs/credentials.md", "docs/agent-security.md"],
+      "validation": [
+        "docs/credentials.md: format reference with schema, examples, migration ✓",
+        "docs/agent-security.md: authoring guide covering all W2 features ✓"
+      ]
+    },
+    {
+      "id": "W2-T13",
+      "name": "Tests for CredentialStore + egress proxy",
+      "status": "completed",
+      "files": ["src/credentials.test.ts", "src/egress-proxy.test.ts", "package.json"],
+      "validation": [
+        "15 CredentialStore tests: legacy mode, strict mode, edge cases ✓",
+        "14 EgressFilter tests: exact match, wildcard, edge cases ✓",
+        "Test files added to package.json test scripts ✓",
+        "All 160 unit tests pass ✓"
+      ]
     }
   ]
 }

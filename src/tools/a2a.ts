@@ -4,10 +4,12 @@ import { AgentCardResolver, ClientFactory } from "@a2a-js/sdk/client";
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { A2AAgentEntry } from "../config.js";
+import type { EgressFilter } from "../egress-proxy.js";
+import { validateUrl } from "../url-safety.js";
 
 const MAX_CARD_CACHE = 50;
 
-export function createA2ATools(agents: Record<string, A2AAgentEntry>) {
+export function createA2ATools(agents: Record<string, A2AAgentEntry>, egressFilter?: EgressFilter) {
   const cardCache = new Map<string, AgentCard>();
   const clientFactory = new ClientFactory();
 
@@ -18,6 +20,9 @@ export function createA2ATools(agents: Record<string, A2AAgentEntry>) {
     }
     cardCache.set(url, card);
   }
+
+  // Set of pre-registered agent URLs (trusted — skip SSRF validation)
+  const registeredUrls = new Set(Object.values(agents).map((a) => a.url));
 
   // Resolve name or URL to a URL
   function resolveUrl(nameOrUrl: string): string {
@@ -31,6 +36,21 @@ export function createA2ATools(agents: Record<string, A2AAgentEntry>) {
       );
     }
     return entry.url;
+  }
+
+  /**
+   * Validate a resolved URL for SSRF unless it's a pre-registered agent URL.
+   * Registered URLs are configured by the operator in config.yaml and are trusted.
+   * Also enforces egress domain allowlist when configured.
+   */
+  async function validateA2AUrl(resolved: string): Promise<void> {
+    if (registeredUrls.has(resolved)) {
+      // Registered URLs bypass SSRF check but still must pass egress filter
+      if (egressFilter) egressFilter.validate(resolved);
+      return;
+    }
+    await validateUrl(resolved);
+    if (egressFilter) egressFilter.validate(resolved);
   }
 
   const a2aList = tool(
@@ -64,6 +84,8 @@ export function createA2ATools(agents: Record<string, A2AAgentEntry>) {
     async ({ url }) => {
       try {
         const resolved = resolveUrl(url);
+        await validateA2AUrl(resolved);
+
         const cached = cardCache.get(resolved);
         if (cached) {
           return { content: [{ type: "text" as const, text: JSON.stringify(cached, null, 2) }] };
@@ -89,6 +111,7 @@ export function createA2ATools(agents: Record<string, A2AAgentEntry>) {
     async ({ url, message }) => {
       try {
         const resolved = resolveUrl(url);
+        await validateA2AUrl(resolved);
         const client = await clientFactory.createFromUrl(resolved);
         const result = await client.sendMessage({
           message: {

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { render } from "ink";
@@ -195,11 +195,146 @@ if (getFlag("card")) {
   process.exit(0);
 }
 
+// --- Subcommand: run <agent> "message" (headless execution with structured exit codes) ---
+
+if (args[0] === "run") {
+  const runAgent = args[1];
+  const runMessage = args.slice(2).join(" ");
+
+  if (!runAgent || !runMessage) {
+    console.error('Usage: mastersof-ai run <agent> "message"');
+    process.exit(1);
+  }
+
+  let agentContext: ReturnType<typeof resolveAgent>;
+  try {
+    agentContext = resolveAgent(runAgent);
+  } catch (err) {
+    if (err instanceof AgentNotFoundError) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    throw err;
+  }
+
+  const agentEnvKeys = loadAgentEnv(agentContext.agentDir);
+  const startTime = Date.now();
+  let exitCode = 0;
+
+  try {
+    const { systemPrompt, manifest } = await buildSystemPrompt(agentContext, config);
+    const toolFilter = manifest.frontmatter.tools ?? undefined;
+    const credentialsConfig = manifest.frontmatter.credentials ?? undefined;
+    const allowedDomains = manifest.frontmatter.sandbox?.allowedDomains;
+    const toolOperations = manifest.frontmatter.toolOperations ?? undefined;
+    const options = buildOptions(
+      agentContext,
+      {
+        systemPrompt,
+        cwd: agentContext.workspaceDir,
+        agentEnv: agentEnvKeys,
+        credentialsConfig,
+        allowedDomains,
+        toolFilter,
+        toolOperations,
+        mcpConfigs: manifest.frontmatter.mcp,
+      },
+      config,
+    );
+    const stream = sendMessage(runMessage, options);
+
+    let responseBuffer = "";
+
+    for await (const msg of stream) {
+      if (msg.type === "stream_event") {
+        const event = (msg as any).event;
+        if (event?.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
+          process.stdout.write(event.delta.text);
+          responseBuffer += event.delta.text;
+        }
+      }
+
+      if (msg.type === "assistant" && !responseBuffer) {
+        const text = (msg as any).message?.content
+          ?.filter((block: any) => block.type === "text")
+          .map((block: any) => block.text)
+          .join("");
+        if (text) {
+          process.stdout.write(text);
+          responseBuffer = text;
+        }
+      }
+    }
+    process.stdout.write("\n");
+  } catch (err) {
+    console.error("");
+    console.error(formatError(err));
+    exitCode = 1;
+  }
+
+  // W2-T07: Append run record to runs.jsonl
+  const durationMs = Date.now() - startTime;
+  const runRecord = {
+    timestamp: new Date().toISOString(),
+    agent: runAgent,
+    message: runMessage.slice(0, 200),
+    exitCode,
+    durationMs,
+  };
+
+  try {
+    mkdirSync(agentContext.stateDir, { recursive: true });
+    const runsPath = join(agentContext.stateDir, "runs.jsonl");
+    appendFileSync(runsPath, `${JSON.stringify(runRecord)}\n`);
+  } catch {
+    // Best-effort logging — don't fail the run
+  }
+
+  process.exit(exitCode);
+}
+
+// --- Subcommand: credentials migrate ---
+
+if (args[0] === "credentials" && args[1] === "migrate") {
+  const targetAgent = args[2] ?? config.defaultAgent ?? DEFAULT_AGENT;
+  let agentContext: ReturnType<typeof resolveAgent>;
+  try {
+    agentContext = resolveAgent(targetAgent);
+  } catch (err) {
+    if (err instanceof AgentNotFoundError) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    throw err;
+  }
+
+  const agentEnvKeys = loadAgentEnv(agentContext.agentDir);
+  const keys = Object.keys(agentEnvKeys).filter((k) => k !== "DOTENV_PRIVATE_KEY");
+
+  if (keys.length === 0) {
+    console.log(`No .env keys found for agent "${targetAgent}".`);
+    process.exit(0);
+  }
+
+  console.log(`# Credential migration for agent "${targetAgent}"`);
+  console.log("# Add this to your IDENTITY.md frontmatter:\n");
+  console.log("credentials:");
+  console.log("  grants:");
+  console.log("    all-keys:");
+  console.log(`      keys: [${keys.join(", ")}]`);
+  console.log("      tools: [web]  # Restrict to specific tool domains as needed");
+  console.log("");
+  console.log("# Review and split grants by sensitivity level.");
+  console.log("# Example: separate read-only keys from write keys,");
+  console.log("# and add 'approval: required' for sensitive operations.");
+  process.exit(0);
+}
+
 // --- Flag: --serve (server mode) ---
 
 if (getFlag("serve")) {
   const port = parseInt(getFlagValue("port") ?? "3200", 10);
-  const host = getFlagValue("host") ?? "0.0.0.0";
+  const host = getFlagValue("host") ?? "127.0.0.1";
 
   const { loadAccessConfig } = await import("./access.js");
   const { startServer } = await import("./serve.js");
@@ -277,9 +412,21 @@ if (getFlag("serve")) {
     try {
       const { systemPrompt, manifest } = await buildSystemPrompt(agentContext, config);
       const toolFilter = manifest.frontmatter.tools ?? undefined;
+      const credentialsConfig = manifest.frontmatter.credentials ?? undefined;
+      const allowedDomains = manifest.frontmatter.sandbox?.allowedDomains;
+      const toolOperations = manifest.frontmatter.toolOperations ?? undefined;
       const options = buildOptions(
         agentContext,
-        { systemPrompt, cwd: agentContext.workspaceDir, agentEnv: agentEnvKeys, toolFilter },
+        {
+          systemPrompt,
+          cwd: agentContext.workspaceDir,
+          agentEnv: agentEnvKeys,
+          credentialsConfig,
+          allowedDomains,
+          toolFilter,
+          toolOperations,
+          mcpConfigs: manifest.frontmatter.mcp,
+        },
         config,
       );
       const stream = sendMessage(message, options);

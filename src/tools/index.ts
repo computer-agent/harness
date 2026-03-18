@@ -1,6 +1,8 @@
 import { createSdkMcpServer, type McpServerConfig as SdkMcpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentContext } from "../agent-context.js";
 import type { HarnessConfig } from "../config.js";
+import type { CredentialStore } from "../credentials.js";
+import type { EgressFilter } from "../egress-proxy.js";
 import type { Logger } from "../logger.js";
 import type { McpServerManifest, ToolDomain } from "../manifest.js";
 import type { RemoteSandboxPolicy } from "../sandbox.js";
@@ -54,9 +56,10 @@ export function createAgentServers(
   ctx: AgentContext,
   config: HarnessConfig,
   cwd: string,
-  agentEnv: Record<string, string> = {},
+  credentialStore: CredentialStore,
   toolFilter?: ToolFilter,
   sandboxPolicy?: RemoteSandboxPolicy,
+  egressFilter?: EgressFilter,
 ) {
   const prefix = `${ctx.name}-`;
   const servers: Record<string, ReturnType<typeof createSdkMcpServer>> = {};
@@ -65,7 +68,8 @@ export function createAgentServers(
     servers[`${prefix}memory`] = createServer(`${prefix}memory`, createMemoryTools(ctx.memoryDir));
   }
   if (isToolEnabled("web", config, toolFilter)) {
-    servers[`${prefix}web`] = createServer(`${prefix}web`, createWebTools(config.tools.web, agentEnv));
+    const webEnv = credentialStore.resolveFlat("web");
+    servers[`${prefix}web`] = createServer(`${prefix}web`, createWebTools(config.tools.web, webEnv, egressFilter));
   }
   if (isToolEnabled("introspection", config, toolFilter)) {
     servers[`${prefix}introspection`] = createServer(
@@ -77,18 +81,20 @@ export function createAgentServers(
     servers[`${prefix}workspace`] = createServer(`${prefix}workspace`, createWorkspaceTools(cwd));
   }
   if (isToolEnabled("shell", config, toolFilter)) {
+    // Shell gets all env via toFlatEnv — shell env filtering is handled by buildShellEnv (Wave 1)
+    const shellEnv = credentialStore.toFlatEnv();
     if (sandboxPolicy) {
       // Remote mode: only create shell if policy allows, always sandboxed
       if (sandboxPolicy.shell) {
         servers[`${prefix}shell`] = createServer(
           `${prefix}shell`,
-          createSandboxedShellTools(cwd, sandboxPolicy, agentEnv),
+          createSandboxedShellTools(cwd, sandboxPolicy, shellEnv),
         );
       }
       // If shell not allowed by policy, don't create the server at all (Layer 1 defense)
     } else {
       // CLI mode: unsandboxed shell
-      servers[`${prefix}shell`] = createServer(`${prefix}shell`, createShellTools(cwd, agentEnv));
+      servers[`${prefix}shell`] = createServer(`${prefix}shell`, createShellTools(cwd, shellEnv));
     }
   }
   if (isToolEnabled("models", config, toolFilter)) {
@@ -97,10 +103,10 @@ export function createAgentServers(
   if (isToolEnabled("tasks", config, toolFilter)) {
     servers[`${prefix}tasks`] = createServer(`${prefix}tasks`, createTaskTools(ctx.memoryDir));
   }
-  if (config.tools.a2a.enabled) {
-    servers[`${prefix}a2a`] = createServer(`${prefix}a2a`, createA2ATools(config.tools.a2a.agents));
+  if (isToolEnabled("a2a", config, toolFilter)) {
+    servers[`${prefix}a2a`] = createServer(`${prefix}a2a`, createA2ATools(config.tools.a2a.agents, egressFilter));
   }
-  if (config.tools.scratchpad.enabled) {
+  if (isToolEnabled("scratchpad", config, toolFilter)) {
     servers[`${prefix}scratchpad`] = createServer(`${prefix}scratchpad`, createScratchpadTools(ctx.workspaceDir));
   }
 
@@ -110,7 +116,17 @@ export function createAgentServers(
 // --- External MCP server merging ---
 
 // Harness server names that external MCP servers cannot collide with
-const HARNESS_SERVER_SUFFIXES = ["memory", "web", "introspection", "workspace", "shell", "models", "tasks"];
+const HARNESS_SERVER_SUFFIXES = [
+  "memory",
+  "web",
+  "introspection",
+  "workspace",
+  "shell",
+  "models",
+  "tasks",
+  "a2a",
+  "scratchpad",
+];
 
 /**
  * Resolve ${VAR} references in MCP env config against the agent's .env values.
@@ -134,9 +150,8 @@ function resolveEnvVars(
  * @param harnessServers - Servers created by createAgentServers()
  * @param mcpConfigs - MCP server configs from agent frontmatter
  * @param agentPrefix - Agent name prefix (e.g. "cre-analyst-")
- * @param agentEnv - Agent .env values for ${VAR} resolution
+ * @param credentialStore - Credential store for env var resolution
  * @param isRemoteSession - Whether this is a serve mode session
- * @param sandboxPolicy - Remote sandbox policy (if remote)
  * @param logger - Optional logger
  * @returns Merged servers record
  */
@@ -144,11 +159,11 @@ export function mergeExternalMcpServers(
   harnessServers: Record<string, SdkMcpServerConfig>,
   mcpConfigs: McpServerManifest[],
   agentPrefix: string,
-  agentEnv: Record<string, string>,
+  credentialStore: CredentialStore,
   isRemoteSession: boolean,
-  sandboxPolicy?: RemoteSandboxPolicy,
   logger?: Logger,
 ): Record<string, SdkMcpServerConfig> {
+  const agentEnv = credentialStore.toFlatEnv();
   const merged: Record<string, SdkMcpServerConfig> = { ...harnessServers };
 
   for (const mcp of mcpConfigs) {
@@ -172,16 +187,17 @@ export function mergeExternalMcpServers(
         details: { server: mcp.server, uri: mcp.uri },
       });
     } else if (mcp.command) {
-      if (isRemoteSession && !sandboxPolicy) {
-        // Remote session without sandbox — skip command-based MCP
+      if (isRemoteSession) {
+        // Remote (serve mode): always block command-based MCP — arbitrary command execution
+        // is too dangerous even with sandbox, as the MCP server runs outside the sandbox
         logger?.warn(
           "mcp",
-          "mcp.skipped",
-          `Command-based MCP server "${mcp.server}" skipped — remote session without sandbox`,
+          "mcp.blocked",
+          `Command-based MCP server "${mcp.server}" blocked — not allowed in serve mode`,
         );
         continue;
       }
-      // Command-based MCP — allowed in CLI mode or sandboxed remote (stdio transport)
+      // Command-based MCP — allowed in CLI mode only (stdio transport)
       const resolvedEnv = resolveEnvVars(mcp.env, agentEnv);
       merged[mcp.server] = {
         type: "stdio",
