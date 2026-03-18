@@ -4,7 +4,7 @@
 
 import { WebSocket } from "ws";
 
-const TOKEN = "b3f88d0b-e226-486e-b0f6-80a5b98535cc";
+const TOKEN = "00000000-0000-0000-0000-000000000001";
 const WS_URL = `ws://localhost:3200/ws?token=${TOKEN}`;
 
 let pass = 0;
