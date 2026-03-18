@@ -35,6 +35,9 @@ jobs:
       - name: Typecheck (web)
         run: cd web && npm ci && npx tsc -b
 
+      - name: Test (web)
+        run: cd web && npx vitest run
+
       - name: Dead code (Knip)
         run: npx knip
 

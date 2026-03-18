@@ -11,6 +11,10 @@ export default defineConfig({
       "@shared": path.resolve(__dirname, "../src/types"),
     },
   },
+  test: {
+    environment: "jsdom",
+    globals: true,
+  },
   server: {
     proxy: {
       "/api": "http://localhost:3100",
