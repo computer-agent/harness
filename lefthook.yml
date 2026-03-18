@@ -7,3 +7,6 @@ pre-commit:
       stage_fixed: true
     typecheck:
       run: npx tsc --noEmit
+    typecheck-web:
+      glob: "web/**/*.{ts,tsx}"
+      run: cd web && npx tsc -b
