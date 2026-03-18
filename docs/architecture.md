@@ -1,207 +1,334 @@
 # Architecture
 
-## What The Harness Is
+## Overview
 
-A standalone agent runtime with two interfaces: a terminal TUI for single-user iteration, and a web UI for multi-user remote access. Write a markdown agent definition, run an agent — interactively via TUI or as a web service via `--serve`. Both interfaces share the same agent runtime, tools, and configuration.
-
-## Dual-Interface Model
+The harness is a standalone agent runtime with two interfaces: a terminal TUI for single-user development and a web UI for multi-user remote access. Both interfaces share the same core: agent loading, system prompt assembly, Claude Agent SDK integration, MCP tools, sub-agents, sessions, and memory.
 
 ```
-                       ┌──────────────────────────────────────────┐
-                       │          Shared Agent Runtime             │
-                       │  IDENTITY.md loading, system prompt,      │
-                       │  Claude Agent SDK, MCP tools, sub-agents  │
-                       └─────────────┬────────────────┬───────────┘
-                                     │                │
-                 ┌───────────────────┘                └───────────────────┐
-                 │                                                       │
-    ┌────────────▼──────────────┐                  ┌─────────────────────▼─────────────┐
-    │     Terminal TUI          │                  │         Web UI (--serve)           │
-    │  mastersof-ai [--agent x] │                  │  mastersof-ai --serve [--port N]   │
-    │                           │                  │                                    │
-    │  React/Ink terminal UI    │                  │  Fastify backend (REST + WebSocket)│
-    │  Single user, local       │                  │  React SPA frontend (web/)         │
-    │  Sessions on disk         │                  │  Multi-user with token auth        │
-    │  Direct keyboard I/O      │                  │  Per-user session isolation         │
-    └───────────────────────────┘                  └────────────────────────────────────┘
+                         +------------------------------------------+
+                         |          Shared Agent Runtime              |
+                         |                                            |
+                         |  IDENTITY.md  -->  System Prompt Assembly  |
+                         |  Claude Agent SDK (query / streaming)      |
+                         |  MCP Tool Servers (in-process)             |
+                         |  Sub-Agents (researcher, deep-thinker,     |
+                         |              writer)                       |
+                         |  Sessions, Memory, Configuration           |
+                         +----------+-----------------------+---------+
+                                    |                       |
+              +---------------------+---+           +-------+---------------------+
+              |     Terminal TUI        |           |         Web UI (--serve)     |
+              |                         |           |                              |
+              |  React/Ink              |           |  Fastify Backend             |
+              |  Single user            |           |    REST API + WebSocket      |
+              |  Local sessions         |           |    Token auth (access.yaml)  |
+              |  Keyboard I/O           |           |    Rate limiting, CORS       |
+              |                         |           |    Per-user isolation         |
+              |  src/components/App.tsx  |           |    Health monitoring          |
+              |                         |           |  src/serve.ts                |
+              +-------------------------+           |                              |
+                                                    |  React SPA Frontend          |
+                                                    |    Agent cards, chat, sidebar |
+                                                    |    Tool calls, @mentions      |
+                                                    |    Dark mode, i18n, voice     |
+                                                    |  web/src/App.tsx              |
+                                                    +------------------------------+
 ```
 
-### Terminal TUI
+## Data Flow
 
-The default mode. Single-user, interactive, runs in a terminal. React/Ink renders the UI. Sessions are stored locally. Best for iterative agent work, development, and personal use.
-
-```bash
-mastersof-ai                          # default agent
-mastersof-ai --agent analyst          # specific agent
-mastersof-ai --resume                 # resume last session
-```
-
-### Web UI (Serve Mode)
-
-Started with `--serve`. A Fastify HTTP server exposes a REST API and WebSocket endpoint. A separate React SPA (in `web/`) connects to the server and provides a browser-based chat interface. Multiple users connect simultaneously, each with their own sessions and workspace isolation. Authentication is token-based via `~/.mastersof-ai/access.yaml`.
-
-```bash
-mastersof-ai --serve                  # start on port 3100
-mastersof-ai --serve --port 5000      # custom port
-```
-
-The backend provides:
-- **REST API** — Agent roster (`/api/agents`), session CRUD (`/api/sessions`), usage tracking (`/api/usage`), health checks (`/health`), privacy endpoints, admin operations
-- **WebSocket** (`/ws`) — Real-time streaming of text tokens, thinking tokens, tool calls, sub-agent progress, tool approval requests
-- **Security** — Token auth, rate limiting, CORS origin validation, per-user cost caps, connection limits
-- **Operations** — Health monitoring, hot reload (watches agents dir + config files), graceful shutdown with connection draining, structured logging
-
-The frontend provides:
-- Agent card grid (home screen)
-- Conversation sidebar with session management
-- Streaming chat with markdown rendering
-- Tool call display (collapsible, with approval flow)
-- @mention agent switching
-- Dark mode, i18n (English + Portuguese), voice input
-- WebSocket reconnection with message replay
-
-## How It Works
-
-1. User starts the harness (optionally specifying an agent)
-2. Harness loads the agent definition — reads `IDENTITY.md` from the agent's directory
-3. Parses optional YAML frontmatter for metadata (name, description, tools, access, MCP servers)
-4. Loads persistent memory (`CONTEXT.md`) if present
-5. Builds the system prompt: identity + memory + environment onboarding + verification protocol + current date/timezone
-6. Creates MCP tool servers based on config and frontmatter (only enabled + allowed tools)
-7. Connects to the model via Claude Agent SDK
-8. Launches TUI for interactive conversation, or starts Fastify server if `--serve`
-9. Handles tool calls, streaming responses, sub-agent delegation
-
-## Source Layout
+### TUI Mode
 
 ```
-mastersof-ai-harness/
-├── bin/mastersof-ai.js          — Entry point (tsx wrapper)
-├── defaults/agents/             — Default agents (copied on first run)
-│   ├── assistant/IDENTITY.md
-│   ├── analyst/IDENTITY.md
-│   └── cofounder/IDENTITY.md
-├── src/
-│   ├── index.tsx                — CLI entry, arg parsing, TUI/server launch
-│   ├── config.ts                — Config loading + defaults (HarnessConfig type)
-│   ├── serve.ts                 — Fastify HTTP/WS server (--serve mode)
-│   ├── access.ts                — Token auth, access.yaml loading, agent filtering
-│   ├── manifest.ts              — IDENTITY.md frontmatter parsing (zod schemas)
-│   ├── first-run.ts             — First run setup
-│   ├── create-agent.ts          — `mastersof-ai create <name>`
-│   ├── agent-context.ts         — Resolve agent paths, listAgents()
-│   ├── agent.ts                 — Build system prompt, SDK options, hooks
-│   ├── prompt.ts                — Load identity/definition file
-│   ├── env.ts                   — Per-agent .env loading (dotenvx)
-│   ├── errors.ts                — Error classification + diagnostics
-│   ├── sandbox.ts               — Bubblewrap sandbox (--sandbox)
-│   ├── sessions.ts              — Session persistence
-│   ├── message-store.ts         — Per-session message persistence (serve mode)
-│   ├── message-buffer.ts        — In-memory message buffer for WS reconnection
-│   ├── cost.ts                  — Per-user token budget tracking
-│   ├── usage.ts                 — Usage tracking (per-session, per-user)
-│   ├── rate-limit.ts            — Rate limiting (messages, connections, auth)
-│   ├── health.ts                — Health monitoring (shallow + deep checks)
-│   ├── privacy.ts               — LGPD: consent, export, deletion, retention
-│   ├── logger.ts                — Structured logging
-│   ├── watcher.ts               — File watcher for hot reload
-│   ├── a2a/                     — A2A protocol integration
-│   │   ├── index.ts             — Module exports
-│   │   ├── server.ts            — Express A2A server (JSON-RPC endpoint)
-│   │   ├── agent-card.ts        — Agent Card generation from IDENTITY.md
-│   │   └── executor.ts          — AgentExecutor bridge (A2A → harness)
-│   ├── agents/                  — Sub-agent definitions (TypeScript)
-│   │   ├── index.ts
-│   │   ├── researcher.ts
-│   │   ├── deep-thinker.ts
-│   │   └── writer.ts
-│   ├── tools/                   — MCP tool servers
-│   │   ├── index.ts             — Server creation (config + frontmatter-aware)
-│   │   ├── memory.ts
-│   │   ├── web.ts
-│   │   ├── workspace.ts
-│   │   ├── shell.ts
-│   │   ├── introspection.ts
-│   │   ├── model-query.ts
-│   │   ├── tasks.ts
-│   │   ├── scratchpad.ts        — Sub-agent shared scratchpad (.scratch/)
-│   │   └── a2a.ts               — A2A client tools (discover, call, list)
-│   ├── components/              — React/Ink TUI (terminal interface)
-│   │   ├── App.tsx              — Main app component
-│   │   ├── ChatHistory.tsx
-│   │   ├── InputArea.tsx
-│   │   ├── StreamingResponse.tsx
-│   │   ├── Message.tsx
-│   │   ├── MultilineInput.tsx
-│   │   ├── AskUserQuestion.tsx
-│   │   └── ThinkingAnimation.tsx
-│   ├── lib/                     — Utilities
-│   │   ├── editor.ts            — External editor support (Ctrl+G)
-│   │   └── ink-clear.ts         — Ink instance cleanup
-│   └── types/
-│       ├── ws.ts                — WebSocket protocol types (shared with frontend)
-│       └── marked-terminal.d.ts — Type shim
-├── web/                         — Web frontend SPA
-│   ├── src/
-│   │   ├── App.tsx              — Router, auth guard, app shell
-│   │   ├── main.tsx             — Entry point
-│   │   ├── components/
-│   │   │   ├── agents/          — AgentCard, AgentGrid
-│   │   │   ├── auth/            — AuthGuard, TokenEntry
-│   │   │   ├── chat/            — ChatPanel, InputArea, MessageBubble,
-│   │   │   │                      ToolCallBlock, MentionAutocomplete,
-│   │   │   │                      SubagentIndicator
-│   │   │   ├── layout/          — AppShell, AgentView
-│   │   │   ├── sidebar/         — ConversationSidebar, ConversationItem
-│   │   │   ├── shared/          — ReconnectBanner, StatusDot
-│   │   │   └── ui/              — Radix-based primitives (button, card, etc.)
-│   │   ├── hooks/               — useAgentChat, useAgentRoster, useAuth,
-│   │   │                          useSessions, useTheme, useVoiceInput
-│   │   ├── stores/              — Zustand stores (auth, chat, ui)
-│   │   ├── lib/                 — API client, WS client, constants, i18n
-│   │   ├── locales/             — en.json, pt-BR.json
-│   │   └── types/               — Frontend type definitions
-│   ├── vite.config.ts           — Dev proxy to backend on localhost:3100
-│   └── wrangler.toml            — Cloudflare Pages deployment config
-└── package.json
+User types message
+    |
+    v
+App.tsx (React/Ink) --> buildSystemPrompt()
+    |                       |
+    |                   Loads IDENTITY.md (strips frontmatter)
+    |                   Loads CONTEXT.md (persistent memory)
+    |                   Adds date/time, workspace path
+    |                   Adds environment context (workspace files, enabled tools)
+    |                   Adds verification protocol, session continuity
+    |                       |
+    v                       v
+buildOptions() -----> Creates MCP tool servers (config + frontmatter filtering)
+    |                 Creates sub-agent registry
+    |                 Registers SDK hooks (logging, compact output, loop detection)
+    |                 Registers canUseTool callback (verification, approvals)
+    |
+    v
+sendMessage() --> query() (Claude Agent SDK)
+    |
+    v
+Stream events --> StreamingResponse.tsx renders tokens
+    |               Tool calls shown inline
+    |               Sub-agent progress tracked
+    |
+    v
+Result --> ChatHistory.tsx displays conversation
+           Session saved to disk
 ```
+
+### Serve Mode
+
+```
+Browser connects via WebSocket
+    |
+    v
+Fastify server (serve.ts)
+    |
+    +-- Authenticate token (SHA-256 hash lookup in access.yaml)
+    +-- Check rate limits (per-user message rate, connection limits)
+    +-- Check cost budget (session/daily/monthly token caps)
+    |
+    v
+resolveRemoteAgent() --> Per-user workspace and memory isolation
+    |                     workspace/{userId}/, memory/{userId}/
+    |
+    v
+buildSystemPrompt() + buildOptions() (same as TUI)
+    |
+    v
+sendMessage() --> query() (Claude Agent SDK)
+    |
+    v
+Stream events --> WebSocket messages to browser
+    |               WsToken (text/thinking), WsToolUseStart,
+    |               WsAssistantMessage, sub-agent progress
+    |
+    v
+React SPA renders conversation
+    Messages persisted incrementally
+    MessageBuffer supports reconnection with replay
+```
+
+## Agent Loading
+
+```
+mastersof-ai --agent analyst
+    |
+    v
+resolveAgent("analyst")                                   [src/agent-context.ts]
+    |
+    +-- Validate name (no path traversal, alphanumeric + hyphens)
+    +-- Check ~/.mastersof-ai/agents/analyst/ exists
+    +-- Check IDENTITY.md exists
+    +-- Create workspace/ if missing
+    |
+    v
+Returns AgentContext {
+    name, agentDir, identityPath,
+    memoryDir, contextFile,
+    stateDir, sessionsDir,
+    workspaceDir
+}
+    |
+    v
+loadAgentManifest()                                       [src/manifest.ts]
+    |
+    +-- Parse YAML frontmatter (zod-validated)
+    +-- Extract: name, description, icon, tags, starters,
+    |            access, tools.allow/deny, mcp configs
+    +-- Return markdown body (frontmatter stripped)
+    |
+    v
+buildSystemPrompt()                                       [src/agent.ts]
+    |
+    +-- Identity (IDENTITY.md body, as-is)
+    +-- Memory (CONTEXT.md if present)
+    +-- Date, time, timezone
+    +-- Workspace path
+    +-- Environment onboarding (files, PROGRESS.json, enabled tools)
+    +-- Verification protocol (if configured)
+    +-- Session continuity guidance
+    +-- Sub-agent coordination guidance (if scratchpad enabled)
+```
+
+## Sub-Agent Architecture
+
+The primary agent delegates to sub-agents via the Claude Agent SDK's agent registry. Sub-agents run in separate contexts with their own system prompts, turn limits, and tool restrictions.
+
+```
+Primary Agent
+    |
+    +-- delegate to "researcher"
+    |       maxTurns: 30
+    |       disallowed: write_file, edit_file, shell_exec, AskUserQuestion
+    |       Writes findings to .scratch/
+    |
+    +-- delegate to "deep-thinker"
+    |       maxTurns: 15
+    |       disallowed: write_file, edit_file, shell_exec, AskUserQuestion
+    |       Reads from .scratch/, writes analysis back
+    |
+    +-- delegate to "writer"
+            maxTurns: 20
+            disallowed: shell_exec, AskUserQuestion
+            Reads .scratch/ findings + analysis, composes output
+```
+
+The `.scratch/` directory (`workspace/.scratch/`) is the coordination point. Sub-agents write intermediate results there instead of passing everything through the parent's context window. The scratchpad tool confines all paths to `.scratch/` -- no escape is possible.
+
+## Tool System
+
+Tools are in-process MCP servers, one per domain. Two layers of filtering determine which tools an agent gets:
+
+```
+Layer 1: Global config (config.yaml)     Layer 2: Agent frontmatter
+    tools.memory.enabled: true       +    tools.allow: [memory, web]
+    tools.shell.enabled: true        +    (or tools.deny: [shell])
+                                     =
+                              Actual tools created
+```
+
+The SDK's MCP tool search is automatically enabled when tool descriptions exceed 10% of the context window. The SDK defers less relevant tools and searches on demand -- transparent to agents.
+
+External MCP servers declared in agent frontmatter are merged with harness servers at startup. URI-based servers (HTTP transport) are always allowed. Command-based servers (stdio transport) are only allowed in CLI mode or sandboxed remote sessions.
+
+## Serve Mode Architecture
+
+```
+                    +---------- Fastify Server -----------+
+                    |                                      |
+                    |  REST API                            |
+                    |    GET  /api/agents          Roster  |
+                    |    GET  /api/agents/:id       Detail |
+                    |    GET  /api/sessions         List   |
+                    |    POST /api/sessions         Create |
+                    |    GET  /api/sessions/:id/messages   |
+                    |    DEL  /api/sessions/:id     Delete |
+                    |    GET  /api/usage           Tracking|
+                    |    GET  /health              Shallow |
+                    |    GET  /health/deep         Admin   |
+                    |    POST /api/admin/reload     Manual |
+                    |    POST /api/admin/users/:id/budget  |
+                    |    GET  /api/privacy         Policy  |
+                    |    GET  /api/users/:id/data  Export  |
+                    |    DEL  /api/users/:id/data  Delete  |
+                    |                                      |
+                    |  WebSocket /ws                       |
+                    |    Streaming conversation             |
+                    |    Tool call approvals                |
+                    |    Reconnection with message replay   |
+                    |                                      |
+                    |  Middleware                           |
+                    |    CORS origin validation             |
+                    |    Rate limiting (HTTP + WS)          |
+                    |    Token authentication               |
+                    |                                      |
+                    |  Background                           |
+                    |    FileWatcher (hot reload)           |
+                    |    CostTracker (budget persistence)   |
+                    |    Retention cleanup (daily)          |
+                    |    Buffer sweep (5 min)               |
+                    +--------------------------------------+
+```
+
+**Multi-user isolation:**
+
+Each authenticated user gets:
+- Isolated workspace: `agents/{name}/workspace/{userId}/`
+- Isolated memory: `agents/{name}/memory/{userId}/`
+- Isolated sessions: `state/{agent}/sessions/{userId}/`
+- Independent token budget tracking
+- Independent rate limiting
+
+The shared agent memory (`memory/CONTEXT.md`) is read-only for remote users -- they can read it but writes go to their own memory directory.
+
+**Hot reload:**
+
+A file watcher monitors three paths:
+- `~/.mastersof-ai/agents/` -- roster changes broadcast to all connected clients
+- `~/.mastersof-ai/config.yaml` -- config reloaded, rate limits updated
+- `~/.mastersof-ai/access.yaml` -- tokens reloaded, revoked tokens disconnected immediately
+
+## User Directory Layout
+
+```
+~/.mastersof-ai/
++-- config.yaml                    Global configuration
++-- access.yaml                    Token auth for serve mode (optional)
++-- agents/
+|   +-- cofounder/
+|   |   +-- IDENTITY.md            Agent identity (system prompt + frontmatter)
+|   |   +-- .env                   Encrypted secrets (optional)
+|   |   +-- sandbox.json           Sandbox config (optional)
+|   |   +-- workspace/             Persistent working directory
+|   |   |   +-- .scratch/          Sub-agent coordination directory
+|   |   |   +-- Alice/             Per-user workspace (serve mode)
+|   |   +-- memory/
+|   |       +-- CONTEXT.md         Auto-loaded persistent memory
+|   |       +-- Alice/             Per-user memory (serve mode)
+|   +-- analyst/
+|   |   +-- IDENTITY.md
+|   +-- assistant/
+|       +-- IDENTITY.md
++-- state/
+    +-- cofounder/
+        +-- sessions/
+        |   +-- <session-files>    TUI sessions
+        |   +-- Alice/             Per-user sessions (serve mode)
+        +-- stderr.log
+```
+
+## Source Code Map
+
+For contributors -- where to find things:
+
+| Area | File(s) | What It Does |
+|------|---------|-------------|
+| CLI entry | `bin/mastersof-ai.js`, `src/index.tsx` | Arg parsing, mode dispatch (TUI / serve / headless) |
+| Agent loading | `src/agent-context.ts`, `src/manifest.ts` | Resolve paths, parse frontmatter |
+| System prompt | `src/agent.ts` | Assemble prompt, build SDK options, hooks, canUseTool |
+| Identity parsing | `src/prompt.ts` | Load raw IDENTITY.md content |
+| Configuration | `src/config.ts` | Load + merge YAML config with defaults |
+| Tools | `src/tools/index.ts` | Create MCP servers, tool filtering, external MCP merge |
+| Individual tools | `src/tools/{name}.ts` | One file per tool domain |
+| Sub-agents | `src/agents/{name}.ts` | Sub-agent definitions (system prompt, constraints) |
+| TUI | `src/components/App.tsx` | React/Ink terminal UI (reducer pattern) |
+| Serve backend | `src/serve.ts` | Fastify server, REST routes, WebSocket handler |
+| Web frontend | `web/src/` | React SPA (Vite, Tailwind, Radix, Zustand) |
+| Auth | `src/access.ts` | Token auth, access.yaml loading, agent filtering |
+| Sessions | `src/sessions.ts` | Session CRUD, persistence |
+| Messages | `src/message-store.ts`, `src/message-buffer.ts` | Message persistence + reconnection buffer |
+| Rate limiting | `src/rate-limit.ts` | Per-user message/connection/auth rate limits |
+| Cost tracking | `src/cost.ts` | Per-user token budget (session/daily/monthly) |
+| Health | `src/health.ts` | Shallow + deep health checks |
+| Privacy | `src/privacy.ts` | LGPD: consent, export, deletion, retention |
+| Hot reload | `src/watcher.ts` | File watcher for agents/config/access changes |
+| Sandbox | `src/sandbox.ts` | Bubblewrap container setup |
+| Secrets | `src/env.ts` | Per-agent .env loading via dotenvx |
+| Errors | `src/errors.ts` | Error classification + diagnostics |
+| Logging | `src/logger.ts` | Structured logging with levels |
+| Path safety | `src/path-safety.ts` | Path traversal validation |
+| A2A server | `src/a2a/server.ts` | Express A2A endpoint (JSON-RPC) |
+| A2A cards | `src/a2a/agent-card.ts` | Agent Card generation from IDENTITY.md |
+| A2A executor | `src/a2a/executor.ts` | Bridge A2A task lifecycle to harness |
+| A2A client | `src/tools/a2a.ts` | MCP tools: discover, call, list remote agents |
 
 ## Tech Stack
 
-**Shared:**
-- **Runtime:** Node.js + tsx (no build step for backend)
-- **SDK:** @anthropic-ai/claude-agent-sdk ^0.2.76 (Claude Agent SDK)
-- **Tools:** MCP protocol (in-process servers)
-- **Config:** YAML (`config.yaml`, `access.yaml`)
-- **Sandbox:** bubblewrap (bwrap)
-
-**Terminal TUI:**
-- **UI:** React + Ink
-- **Sessions:** JSON files on disk
-
-**Web UI Backend (serve mode):**
-- **Server:** Fastify (HTTP + WebSocket)
-- **Auth:** Token-based (SHA-256 hashed tokens in `access.yaml`)
-- **Sessions:** Per-user JSON files on disk
-- **Monitoring:** Health checks, structured logging, cost tracking
-
-**Web UI Frontend:**
-- **Framework:** React 19 + Vite
-- **Styling:** Tailwind CSS 4 + Radix UI
-- **State:** Zustand stores
-- **Routing:** React Router 7
-- **i18n:** i18next (English + Portuguese)
-- **Deploy:** Cloudflare Pages
-
-**A2A Protocol:**
-- **SDK:** @a2a-js/sdk (server + client)
-- **Server:** Express (standalone A2A endpoint)
-- **Client:** MCP tools (`a2a_discover`, `a2a_call`, `a2a_list`)
-
-## A2A Protocol
-
-The harness integrates with the A2A (Agent-to-Agent) protocol in two directions:
-
-**As A2A server** — The `src/a2a/` module provides an Express-based A2A endpoint. Agent Cards are generated from IDENTITY.md (H2 sections become skills). The `--card` flag outputs the Agent Card JSON. The AgentExecutor bridges A2A task lifecycle to the harness's `sendMessage()` / `Query` flow.
-
-**As A2A client** — The `a2a_discover`, `a2a_call`, and `a2a_list` tools let agents call remote A2A-compatible services (LangGraph pipelines, Bedrock agents, other harness instances). Agents are registered in `config.yaml` under `tools.a2a.agents` or discovered by URL.
+| Component | Technology |
+|-----------|-----------|
+| Runtime | Node.js 20+ via tsx (no build step for backend) |
+| SDK | @anthropic-ai/claude-agent-sdk ^0.2.76 |
+| Tools | MCP protocol (in-process servers) |
+| Config | YAML (config.yaml, access.yaml) |
+| TUI | React + Ink |
+| Serve backend | Fastify (HTTP + WebSocket) |
+| Auth | SHA-256 token hashing, constant-time comparison |
+| Web frontend | React 19 + Vite + Tailwind CSS 4 + Radix UI |
+| Frontend state | Zustand |
+| Frontend routing | React Router 7 |
+| i18n | i18next (English + Portuguese) |
+| Frontend deploy | Cloudflare Pages |
+| A2A protocol | @a2a-js/sdk |
+| A2A server | Express (separate from Fastify -- A2A has its own SDK) |
+| Sandbox | bubblewrap (bwrap) |
+| Secrets | dotenvx |
+| Schema validation | Zod 4 |
+| Linting | Biome |
+| Pre-commit | Lefthook |
+| CI | GitHub Actions (Node 20 + 22) |
+| Security scanning | CodeQL (weekly) |

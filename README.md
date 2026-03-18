@@ -2,9 +2,25 @@
 
 [![CI](https://github.com/mastersof-ai/harness/actions/workflows/ci.yml/badge.svg)](https://github.com/mastersof-ai/harness/actions/workflows/ci.yml)
 
-Define agents in markdown. Control the entire system prompt. No hidden framework instructions coloring your agent's behavior.
+An agent runtime where you control the entire system prompt. Write a markdown file, get an agent -- no hidden framework instructions, no magic behavior injection, no black box.
 
-Write an `IDENTITY.md`, run `mastersof-ai`, and your agent starts with exactly the context you gave it — nothing more. Use the terminal TUI for single-user iteration, or `--serve` for a web UI that multiple users can access from their browser. Both share the same agent runtime, tools, and configuration.
+```
+IDENTITY.md  --->  mastersof-ai  --->  Agent with exactly the context you gave it
+```
+
+Use the terminal TUI for local development. Switch to `--serve` for a web UI that your team accesses from a browser. Both run the same agent runtime, tools, and configuration underneath.
+
+## Why This Exists
+
+Most agent frameworks inject their own system prompt that you can't see or override. Your carefully crafted instructions compete with hidden framework behavior. You're debugging a black box.
+
+The harness takes a different approach:
+
+- **Your IDENTITY.md IS the system prompt.** No hidden framework instructions. The harness adds only transparent operational context (date/time, workspace path, memory) -- no behavioral injection.
+- **No separate billing.** Uses your existing Claude Code subscription or API key. Powered by the Claude Agent SDK directly.
+- **Agents are just markdown.** No code to define an agent. Write a file, run a command. Optional YAML frontmatter adds metadata when you need it.
+- **Two interfaces, one runtime.** Terminal TUI for solo iteration. Web UI for team/client access. Same agent behavior in both.
+- **Production-ready.** Token auth, per-user isolation, rate limiting, cost caps, LGPD-compliant privacy, optional bubblewrap sandboxing.
 
 ## Install
 
@@ -12,154 +28,280 @@ Write an `IDENTITY.md`, run `mastersof-ai`, and your agent starts with exactly t
 npm install -g @mastersof-ai/harness
 ```
 
-### Linux / Ubuntu
+**Auth prerequisite:** The harness authenticates via Claude Code credentials or an API key.
+
+```bash
+# Option A: Claude Code credentials (uses your existing subscription)
+npm install -g @anthropic-ai/claude-code && claude login
+
+# Option B: API key
+export ANTHROPIC_API_KEY=your-key
+```
+
+<details>
+<summary>Linux / Ubuntu from scratch</summary>
 
 ```bash
 # Install Node.js 22.x
-apt-get update && apt-get install -y curl
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt-get install -y nodejs
 
 # Install the harness
 npm install -g @mastersof-ai/harness
 ```
-
-**Auth prerequisite:** The harness authenticates via Claude Code credentials or an API key. Before first run:
-
-- **Claude Code:** `npm install -g @anthropic-ai/claude-code && claude login`
-- **API key:** `export ANTHROPIC_API_KEY=your-key`
+</details>
 
 ## Quick Start
 
-### Terminal TUI (single user)
+**Start the default agent:**
 
 ```bash
-mastersof-ai                          # first-run setup, starts default agent
-mastersof-ai --agent analyst          # start a specific agent
-mastersof-ai --message "hello"        # headless one-shot mode
-mastersof-ai --resume                 # resume last session
-mastersof-ai create my-agent          # scaffold a new agent
-mastersof-ai --list-agents            # list available agents
+mastersof-ai
 ```
 
-### Web UI (multi-user)
+On first run, `~/.mastersof-ai/` is created with three starter agents (cofounder, assistant, analyst) and a default config. You're in a TUI conversation immediately.
 
-```bash
-mastersof-ai --serve                  # start web server on port 3100
-mastersof-ai --serve --port 5000      # custom port
-```
-
-The web UI requires token-based auth configured in `~/.mastersof-ai/access.yaml`. See [Configuration](docs/configuration.md) for setup.
-
-On first run, `~/.mastersof-ai/` is created with three default agents:
-
-- **cofounder** — co-founder template with self-improvement tools (default)
-- **assistant** — general purpose
-- **analyst** — research and analysis
-
-## Creating Agents
+**Create your own agent:**
 
 ```bash
 mastersof-ai create my-agent
 ```
 
-This creates `~/.mastersof-ai/agents/my-agent/` with a template `IDENTITY.md`. Edit the identity file to customize your agent's personality, instructions, and behavior. Optionally add YAML frontmatter for metadata like display name, description, tool restrictions, and access control.
+This scaffolds `~/.mastersof-ai/agents/my-agent/IDENTITY.md`. Edit it:
 
-Three example agents ship in `defaults/agents/` (cofounder, assistant, analyst). They're copied to `~/.mastersof-ai/agents/` on first run — use them as templates for your own.
+```markdown
+# Market Analyst
 
-## How It Works
+You are a senior market analyst. Your job is to research markets,
+identify trends, and deliver clear, actionable analysis.
 
-- **Identity is markdown.** Each agent is defined by an `IDENTITY.md` file — no code required. Optional YAML frontmatter adds structured metadata.
-- **Two interfaces.** Terminal TUI for local iteration. Web UI (`--serve`) for multi-user remote access. Same agent runtime underneath.
-- **Persistent memory.** Agents read and write to `~/.mastersof-ai/agents/{name}/memory/`. Context survives across sessions.
-- **Built-in tools.** Memory, workspace (file ops), web search/fetch, shell, task tracking, introspection, model queries, A2A client.
-- **Sub-agents.** Researcher, deep-thinker, and writer handle delegated work in separate contexts.
-- **Session management.** Named sessions with resume, rename, and history. Per-user isolation in serve mode.
-- **Config-driven.** Optional `~/.mastersof-ai/config.yaml` for model selection, tool toggles, and serve mode settings.
-- **Sandbox.** Optional `--sandbox` flag runs the agent inside a bubblewrap container for filesystem isolation.
+## How to work
+
+- Use web search to gather current data before forming opinions.
+- Structure every analysis with: thesis, evidence, risks, and conclusion.
+- Save key findings to memory so they compound across sessions.
+- Be direct. Commit to positions after weighing evidence.
+```
+
+Run it:
+
+```bash
+mastersof-ai --agent my-agent
+```
+
+That's it. The agent starts with exactly those instructions, plus whatever tools are enabled in your config.
+
+## Two Interfaces
+
+```
+                    +-----------------------------------------+
+                    |       Shared Agent Runtime               |
+                    |  IDENTITY.md, Claude Agent SDK,          |
+                    |  MCP tools, sub-agents, sessions, memory |
+                    +-------+-------------------------+-------+
+                            |                         |
+              +-------------+----------+   +----------+--------------+
+              |    Terminal TUI        |   |      Web UI             |
+              |    mastersof-ai        |   |      mastersof-ai       |
+              |                        |   |        --serve          |
+              |  React/Ink in terminal |   |  Fastify + React SPA   |
+              |  Single user, local    |   |  Multi-user, token auth |
+              |  Direct keyboard I/O   |   |  Per-user isolation     |
+              +------------------------+   +-------------------------+
+```
+
+### Terminal TUI
+
+```bash
+mastersof-ai                          # default agent
+mastersof-ai --agent analyst          # specific agent
+mastersof-ai --message "summarize X"  # headless single-shot
+mastersof-ai --resume                 # resume last session
+mastersof-ai --list-agents            # show available agents
+```
+
+### Web UI
+
+```bash
+mastersof-ai --serve                  # start on port 3100
+mastersof-ai --serve --port 5000      # custom port
+```
+
+The web UI provides an agent card grid, streaming chat with markdown rendering, tool call display, @mention agent switching, conversation sidebar, dark mode, voice input, and i18n (English + Portuguese). It requires token auth configured in `~/.mastersof-ai/access.yaml` -- see [Configuration](docs/configuration.md).
+
+The frontend (React + Vite + Tailwind) deploys to Cloudflare Pages. The backend runs wherever you host it.
+
+## Tools
+
+Agents discover tools at runtime -- no declarations needed. The same agent definition works with all tools enabled or only a few.
+
+| Tool | What It Does |
+|------|-------------|
+| **memory** | Read/write persistent memory across sessions |
+| **workspace** | File operations (read, write, list, search) |
+| **web** | Web search (Brave) and URL fetch with content extraction |
+| **shell** | Execute shell commands |
+| **tasks** | Lightweight task tracking |
+| **introspection** | Read and propose changes to own identity |
+| **models** | Query other Claude models |
+| **scratchpad** | Shared scratch space for sub-agent coordination |
+| **a2a** | Discover and call remote A2A-protocol agents |
+
+All tools are in-process MCP servers. Enable or disable any of them in `config.yaml`.
+
+## Sub-Agents
+
+The primary agent can delegate to three built-in sub-agents, each running in its own context:
+
+| Sub-Agent | Purpose | Turns | Restrictions |
+|-----------|---------|-------|-------------|
+| **researcher** | Deep research and information gathering | 30 | No file writes, no shell |
+| **deep-thinker** | Extended analysis and reasoning | 15 | No file writes, no shell |
+| **writer** | Content composition and writing | 20 | No shell |
+
+Sub-agents coordinate through a shared `.scratch/` directory -- researcher writes findings, deep-thinker reads and analyzes them, writer composes the output. The parent agent's context stays clean.
+
+## Memory
+
+Agents persist knowledge across sessions through two layers:
+
+1. **Auto-loaded context** -- `CONTEXT.md` is injected into the system prompt at startup. The agent sees accumulated knowledge immediately.
+2. **Memory tools** -- `memory_read`, `memory_write`, `memory_replace`, `memory_insert`, `memory_list`. The agent decides what to remember.
+
+No auto-summarization, no RAG pipeline. The agent controls what persists. Memory files are plain markdown on disk -- inspectable, editable, portable.
+
+See [docs/memory.md](docs/memory.md) for the full design.
 
 ## Configuration
 
-Edit `~/.mastersof-ai/config.yaml`:
+`~/.mastersof-ai/config.yaml`:
 
 ```yaml
-model: claude-opus-4-6[1m]    # default model for all agents
-defaultAgent: cofounder        # agent started with no --agent flag
-effort: max                    # low | medium | high | max
+model: claude-opus-4-6[1m]     # Opus 4.6 with 1M context window
+defaultAgent: cofounder
+effort: max                     # low | medium | high | max
 
 tools:
-  memory:
+  memory:    { enabled: true }
+  workspace: { enabled: true }
+  web:       { enabled: true }
+  shell:     { enabled: true }
+  tasks:     { enabled: true }
+  introspection: { enabled: true }
+  models:    { enabled: true }
+  scratchpad: { enabled: true }
+  a2a:
     enabled: true
-  workspace:
-    enabled: true
-  web:
-    enabled: true
-  shell:
-    enabled: true
-  tasks:
-    enabled: true
-  introspection:
-    enabled: true
-  models:
-    enabled: true
+    agents:                     # Register remote A2A agents by name
+      data-pipeline:
+        url: http://data-agent.internal:4000
+        description: "LangGraph data pipeline agent"
+
+# Behavioral hooks
+hooks:
+  verifyBeforeComplete: true    # Require file verification after writes
+  loopDetection: true           # Warn on repeated edits to same file
+  compactSuccessOutput: true    # Truncate long successful output
 ```
 
-See [docs/configuration.md](docs/configuration.md) for serve mode settings, access control, rate limits, and privacy config.
+See [docs/configuration.md](docs/configuration.md) for serve mode, access control, rate limits, privacy settings, and per-agent frontmatter.
+
+## Agent Frontmatter
+
+Agents can include optional YAML frontmatter for metadata, tool filtering, and access control:
+
+```markdown
+---
+name: CRE Analyst
+description: Commercial real estate research and analysis
+tags: [research, real-estate]
+starters:
+  - "Analyze the Austin office market"
+  - "Compare cap rates across Sun Belt metros"
+access: users
+users: [alice, bob]
+tools:
+  allow: [memory, web, workspace]
+mcp:
+  - server: my-db
+    uri: "http://localhost:8080/sse"
+---
+
+You are a commercial real estate analyst...
+```
+
+See [docs/agents.md](docs/agents.md) for the full frontmatter reference and best practices.
 
 ## TUI Commands
 
-Inside the TUI:
+| Command | Action |
+|---------|--------|
+| `/help` | Show all commands, shortcuts, and settings |
+| `/effort [low\|med\|high\|max]` | Show or change effort level |
+| `/model [model-id]` | Show or change model |
+| `/sessions` | List recent sessions |
+| `/resume [name\|#N]` | Resume a session |
+| `/name <text>` | Rename current session |
+| `/new` | Start fresh session |
+| `/quit` | Exit |
 
-- `/help` — show all commands, shortcuts, and current settings
-- `/effort [low|med|high|max]` — show or set effort level
-- `/model [model-id]` — show or set model
-- `/sessions` — list recent sessions
-- `/resume [name|#N]` — resume a session
-- `/name <text>` — rename current session
-- `/new` — start a fresh session
-- `/quit` — exit
+**Keyboard shortcuts:** `Enter` send, `Ctrl+J` newline, `Ctrl+G` external editor, `Escape` interrupt/clear, `Ctrl+C` (double) exit.
 
-**Keyboard shortcuts:**
+## Security
 
-- `Enter` — send message
-- `Ctrl+J` — insert newline
-- `Ctrl+G` — open external editor
-- `Escape` — interrupt streaming / clear input
-- `Ctrl+C` (double) — exit
+**Access control** -- Serve mode uses SHA-256 hashed tokens in `access.yaml`. Constant-time comparison prevents timing attacks. Per-user agent restrictions and token budgets.
 
-## Auth
-
-Uses your Claude Code subscription. No API key needed.
-
-## Sandbox
-
-Run any agent in a [bubblewrap](https://github.com/containers/bubblewrap) sandbox for filesystem isolation:
+**Sandbox** -- Optional bubblewrap (`bwrap`) container isolates agent filesystem access. Read-only system mounts, read-write workspace, configurable network policy.
 
 ```bash
-mastersof-ai --agent cofounder --sandbox
+mastersof-ai --agent analyst --sandbox
 ```
 
-The sandbox mounts system directories read-only, gives the agent read-write access to its memory, session state, and a configured project directory, and isolates PID/IPC namespaces. On first use, a default `sandbox.json` is created in the agent's directory. Edit it to customize mounts, environment variables, and network access.
+**Serve mode hardening** -- Rate limiting, CORS origin validation, per-user workspace isolation, mandatory remote sandbox, connection limits, auth failure throttling, graceful shutdown with 30s connection draining.
 
-Requires `bwrap` to be installed (`apt install bubblewrap` or equivalent).
+**Privacy** -- LGPD-compliant data export, deletion, consent tracking, and configurable retention policies.
+
+**Code quality** -- Strict TypeScript (`noUncheckedIndexedAccess`), Biome linting, Lefthook pre-commit hooks, GitHub Actions CI (Node 20 + 22), CodeQL security scanning (weekly), path traversal protection.
+
+## A2A Protocol
+
+The harness supports the Agent-to-Agent protocol in both directions:
+
+- **As server** -- Generate Agent Cards from IDENTITY.md (`--card`). H2 sections become skills automatically.
+- **As client** -- `a2a_discover`, `a2a_call`, `a2a_list` tools let your agents call remote A2A agents (LangGraph, Bedrock, other harness instances).
 
 ## Optional Dependencies
 
-- `fd` — used by `find_files` tool (fast file search)
-- `rg` (ripgrep) — used by `grep_files` tool (fast content search)
+| Dependency | Used By | Purpose |
+|-----------|---------|---------|
+| `fd` | `find_files` tool | Fast file search |
+| `rg` (ripgrep) | `grep_files` tool | Fast content search |
+| `bwrap` (bubblewrap) | `--sandbox` flag | Filesystem isolation |
+| `BRAVE_API_KEY` env var | `web_search` tool | Web search (Brave API) |
 
-Both are optional. Tools return clear errors if the binaries are missing.
-
-## Web Search
-
-Set `BRAVE_API_KEY` environment variable to enable the `web_search` tool. `web_fetch` works without it.
+All optional. Tools surface clear errors if dependencies are missing.
 
 ## Troubleshooting
 
-- **`bubblewrap not found`** — Install bwrap (`apt install bubblewrap` or equivalent), or run without `--sandbox`.
-- **API key not set** — Web search requires `BRAVE_API_KEY` to be set in your environment.
-- **No agents on first run** — Check that `~/.mastersof-ai/agents/` was created and contains agent directories. Re-run `mastersof-ai` to trigger first-run setup.
-- **Web UI rejects all requests** — Create `~/.mastersof-ai/access.yaml` with at least one user token. See [Configuration](docs/configuration.md).
+| Problem | Fix |
+|---------|-----|
+| `bubblewrap not found` | `apt install bubblewrap`, or run without `--sandbox` |
+| Web search not working | Set `BRAVE_API_KEY` environment variable |
+| No agents on first run | Check `~/.mastersof-ai/agents/` exists. Re-run `mastersof-ai` to trigger setup. |
+| Web UI rejects requests | Create `~/.mastersof-ai/access.yaml` with user tokens. See [docs/configuration.md](docs/configuration.md). |
+| Auth errors | Run `claude login` or set `ANTHROPIC_API_KEY` |
+
+## Docs
+
+- [Architecture](docs/architecture.md) -- Dual-interface model, data flow, source map
+- [Agents](docs/agents.md) -- Agent creation, frontmatter reference, sub-agents
+- [Configuration](docs/configuration.md) -- Config file, serve mode, access control
+- [Memory](docs/memory.md) -- Persistent memory system
+- [Tools](docs/tools.md) -- Tool system, available tools, MCP servers
+- [Secrets](docs/secrets.md) -- Per-agent encrypted secrets
+- [Sandbox](docs/sandbox.md) -- Bubblewrap isolation
+- [Design Decisions](docs/design-decisions.md) -- Rationale for key choices
+- [Changelog](CHANGELOG.md) -- Version history
 
 ## License
 
