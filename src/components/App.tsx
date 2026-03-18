@@ -421,6 +421,10 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
             cwd: agentContext.workspaceDir,
             agentEnv,
             toolFilter,
+            credentialsConfig: manifest.frontmatter.credentials ?? undefined,
+            allowedDomains: manifest.frontmatter.sandbox?.allowedDomains,
+            toolOperations: manifest.frontmatter.toolOperations ?? undefined,
+            mcpConfigs: manifest.frontmatter.mcp,
             onInstructionsLoaded: (filePath, memoryType, loadReason) => {
               loadedInstructions.push(`  ${memoryType}  ${filePath}  (${loadReason})`);
             },

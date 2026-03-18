@@ -14,6 +14,34 @@ import { isFirstRun, runFirstRun } from "./first-run.js";
 import { setInkClear } from "./lib/ink-clear.js";
 import { findSessionByName, listSessions, loadSession } from "./sessions.js";
 
+// --- Shared headless stream processor ---
+
+import type { Query } from "@anthropic-ai/claude-agent-sdk";
+
+async function streamToStdout(stream: Query): Promise<void> {
+  let responseBuffer = "";
+  for await (const msg of stream) {
+    if (msg.type === "stream_event") {
+      const event = (msg as any).event;
+      if (event?.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
+        process.stdout.write(event.delta.text);
+        responseBuffer += event.delta.text;
+      }
+    }
+    if (msg.type === "assistant" && !responseBuffer) {
+      const text = (msg as any).message?.content
+        ?.filter((block: any) => block.type === "text")
+        .map((block: any) => block.text)
+        .join("");
+      if (text) {
+        process.stdout.write(text);
+        responseBuffer = text;
+      }
+    }
+  }
+  process.stdout.write("\n");
+}
+
 // --- Global error safety net ---
 
 process.on("unhandledRejection", (reason) => {
@@ -241,31 +269,7 @@ if (args[0] === "run") {
       },
       config,
     );
-    const stream = sendMessage(runMessage, options);
-
-    let responseBuffer = "";
-
-    for await (const msg of stream) {
-      if (msg.type === "stream_event") {
-        const event = (msg as any).event;
-        if (event?.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
-          process.stdout.write(event.delta.text);
-          responseBuffer += event.delta.text;
-        }
-      }
-
-      if (msg.type === "assistant" && !responseBuffer) {
-        const text = (msg as any).message?.content
-          ?.filter((block: any) => block.type === "text")
-          .map((block: any) => block.text)
-          .join("");
-        if (text) {
-          process.stdout.write(text);
-          responseBuffer = text;
-        }
-      }
-    }
-    process.stdout.write("\n");
+    await streamToStdout(sendMessage(runMessage, options));
   } catch (err) {
     console.error("");
     console.error(formatError(err));
@@ -429,30 +433,7 @@ if (getFlag("serve")) {
         },
         config,
       );
-      const stream = sendMessage(message, options);
-
-      let responseBuffer = "";
-
-      for await (const msg of stream) {
-        if (msg.type === "stream_event") {
-          const event = (msg as any).event;
-          if (event?.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
-            process.stdout.write(event.delta.text);
-            responseBuffer += event.delta.text;
-          }
-        }
-
-        if (msg.type === "assistant" && !responseBuffer) {
-          const text = (msg as any).message?.content
-            ?.filter((block: any) => block.type === "text")
-            .map((block: any) => block.text)
-            .join("");
-          if (text) {
-            process.stdout.write(text);
-          }
-        }
-      }
-      process.stdout.write("\n");
+      await streamToStdout(sendMessage(message, options));
     } catch (err) {
       console.error("");
       console.error(formatError(err));

@@ -179,6 +179,28 @@ function buildHooks(
   return Object.keys(hooks).length > 0 ? hooks : undefined;
 }
 
+/**
+ * Parse an MCP tool name into its structural parts.
+ * Format: `mcp__<agentName>-<domain>__<toolSuffix>` or just `<toolName>` for built-in tools.
+ *
+ * Examples:
+ *   "mcp__billing-shell__shell_exec"  → { domain: "shell", suffix: "shell_exec" }
+ *   "mcp__billing-web__web_fetch"     → { domain: "web", suffix: "web_fetch" }
+ *   "AskUserQuestion"                 → { domain: null, suffix: "AskUserQuestion" }
+ */
+function parseToolName(toolName: string): { domain: string | null; suffix: string } {
+  const parts = toolName.split("__");
+  if (parts.length >= 3) {
+    const suffix = parts.slice(2).join("__");
+    // Server name is parts[1], e.g. "billing-web" — domain is after the last hyphen
+    const serverName = parts[1] ?? "";
+    const lastHyphen = serverName.lastIndexOf("-");
+    const domain = lastHyphen >= 0 ? serverName.slice(lastHyphen + 1) : serverName;
+    return { domain: domain || null, suffix };
+  }
+  return { domain: null, suffix: toolName };
+}
+
 function buildCanUseTool(
   ctx: AgentContext,
   config: HarnessConfig,
@@ -215,25 +237,28 @@ function buildCanUseTool(
 
     // Layer 3: Per-user tool deny (from access.yaml tools_deny)
     if (userToolsDeny?.length) {
-      // toolName is like "mcp__agent-shell__shell_exec" — extract the domain suffix
-      const toolSuffix = toolName.split("__").pop() ?? toolName;
+      const parsed = parseToolName(toolName);
       for (const denied of userToolsDeny) {
-        // Match full tool name or just the tool suffix
-        if (toolName === denied || toolSuffix === denied || toolName.includes(`-${denied}__`)) {
+        // Match: exact full name, exact tool suffix, or exact domain
+        const matches = toolName === denied || parsed.suffix === denied || parsed.domain === denied;
+        if (matches) {
           if (logger) {
             logger.warn("tool", "tool.denied.user", `Tool denied by user access policy: ${toolName}`, {
               details: { tool: toolName, denied },
             });
           }
-          return { behavior: "deny", message: `Tool "${toolSuffix}" is not allowed for your account` };
+          return { behavior: "deny", message: `Tool "${parsed.suffix}" is not allowed for your account` };
         }
       }
     }
 
     // Layer 4: Agent-level tool operation restrictions (from frontmatter toolOperations)
     if (toolOperations) {
+      const parsed = parseToolName(toolName);
       for (const [pattern, ops] of Object.entries(toolOperations)) {
-        if (!toolName.includes(pattern)) continue;
+        // Match: exact domain, exact suffix, or exact full name
+        const matches = parsed.domain === pattern || parsed.suffix === pattern || toolName === pattern;
+        if (!matches) continue;
         const inp = input as Record<string, unknown>;
         const operation = (inp.operation ?? inp.method ?? inp.action ?? "") as string;
         if (!operation) continue;

@@ -8,6 +8,8 @@ import { z } from "zod";
 import type { EgressFilter } from "../egress-proxy.js";
 import { validateUrl } from "../url-safety.js";
 
+const MAX_REDIRECTS = 5;
+
 const PKG_VERSION = (() => {
   try {
     const pkg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "package.json"), "utf-8"));
@@ -47,6 +49,30 @@ async function extractRelevantContent(markdown: string, userQuery: string, model
     }
   }
   return resultText || markdown;
+}
+
+/**
+ * Redirect-safe fetch: follows redirects manually, validating each hop
+ * against SSRF and egress filters. Prevents redirect-based bypass where
+ * an allowlisted domain 3xx's to a forbidden one.
+ */
+async function safeFetch(url: string, headers: Record<string, string>, egressFilter?: EgressFilter): Promise<Response> {
+  let current = url;
+  for (let i = 0; i < MAX_REDIRECTS; i++) {
+    const res = await fetch(current, { headers, redirect: "manual" });
+    if (res.status < 300 || res.status >= 400) return res;
+
+    const location = res.headers.get("location");
+    if (!location) return res;
+
+    // Resolve relative redirects
+    current = new URL(location, current).toString();
+
+    // Re-validate the redirect target
+    await validateUrl(current);
+    if (egressFilter) egressFilter.validate(current);
+  }
+  throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
 }
 
 export function createWebTools(
@@ -140,11 +166,7 @@ export function createWebTools(
         }
       }
 
-      const res = await fetch(url, {
-        headers: {
-          "User-Agent": `MastersOfAI-Harness/${PKG_VERSION}`,
-        },
-      });
+      const res = await safeFetch(url, { "User-Agent": `MastersOfAI-Harness/${PKG_VERSION}` }, egressFilter);
 
       if (!res.ok) {
         return {
