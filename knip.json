@@ -1,15 +1,17 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
+  "ignoreExportsUsedInFile": true,
+  "exclude": ["types", "enumMembers"],
+  "ignoreBinaries": ["vitest"],
   "workspaces": {
     ".": {
-      "entry": ["src/index.tsx", "bin/mastersof-ai.js"],
+      "entry": ["src/serve.ts", "src/a2a/index.ts"],
       "project": ["src/**/*.{ts,tsx}"],
       "ignoreBinaries": ["knip"]
     },
     "web": {
-      "entry": ["src/main.tsx"],
       "project": ["src/**/*.{ts,tsx}"],
-      "ignoreDependencies": ["tailwindcss", "@tailwindcss/typography"],
+      "ignoreDependencies": ["@testing-library/react", "@testing-library/jest-dom"],
       "ignoreBinaries": ["knip"]
     }
   }
