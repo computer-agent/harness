@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { BrowserRouter, Route, Routes } from "react-router";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { Toaster } from "sonner";
 import { AuthGuard } from "@/components/auth/AuthGuard";
 import { AppShell } from "@/components/layout/AppShell";
@@ -29,6 +29,7 @@ export function App() {
               <Route path="/agent/:agentId" element={<AgentView />} />
               <Route path="/agent/:agentId/new" element={<AgentView isNew />} />
               <Route path="/agent/:agentId/session/:sessionId" element={<AgentView />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
         </AppShell>
