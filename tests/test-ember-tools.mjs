@@ -4,7 +4,7 @@
 import { WebSocket } from "ws";
 
 const TOKEN = "b3f88d0b-e226-486e-b0f6-80a5b98535cc";
-const WS_URL = `ws://localhost:3100/ws?token=${TOKEN}`;
+const WS_URL = `ws://localhost:3200/ws?token=${TOKEN}`;
 
 function connect(sessionId) {
   return new Promise((resolve, reject) => {

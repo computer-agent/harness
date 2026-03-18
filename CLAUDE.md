@@ -31,7 +31,7 @@ Both share agent loading, tools, sub-agents, sessions, and memory.
 ```bash
 npx tsx bin/mastersof-ai.js                         # TUI with default agent
 npx tsx bin/mastersof-ai.js --agent researcher      # TUI with specific agent
-npx tsx bin/mastersof-ai.js --serve                 # Web UI server on port 3100
+npx tsx bin/mastersof-ai.js --serve                 # Web UI server on port 3200
 npx tsx bin/mastersof-ai.js --serve --port 5000     # Web UI on custom port
 npx tsx bin/mastersof-ai.js --agent researcher --sandbox  # Bubblewrap sandbox
 npx tsx bin/mastersof-ai.js --card                  # Output Agent Card JSON

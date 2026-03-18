@@ -1,11 +1,11 @@
 // WebSocket integration test — validates the full conversation flow.
 // Usage: node web/test-ws.mjs
-// Requires: backend running on :3100
+// Requires: backend running on :3200
 
 import { WebSocket } from "ws";
 
 const TOKEN = "b3f88d0b-e226-486e-b0f6-80a5b98535cc";
-const WS_URL = `ws://localhost:3100/ws?token=${TOKEN}`;
+const WS_URL = `ws://localhost:3200/ws?token=${TOKEN}`;
 
 let pass = 0;
 let fail = 0;
@@ -59,7 +59,7 @@ function collectMessages(ws, timeoutMs = 20000) {
 async function testInvalidToken() {
   console.log("\n=== Test: Invalid token rejected ===");
   return new Promise((resolve) => {
-    const ws = new WebSocket("ws://localhost:3100/ws?token=bad-token");
+    const ws = new WebSocket("ws://localhost:3200/ws?token=bad-token");
     ws.on("message", (data) => {
       const msg = JSON.parse(data.toString());
       check("error type for invalid token", msg.type === "error");

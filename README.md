@@ -123,7 +123,7 @@ mastersof-ai --list-agents            # show available agents
 ### Web UI
 
 ```bash
-mastersof-ai --serve                  # start on port 3100
+mastersof-ai --serve                  # start on port 3200
 mastersof-ai --serve --port 5000      # custom port
 ```
 

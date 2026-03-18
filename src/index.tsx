@@ -198,7 +198,7 @@ if (getFlag("card")) {
 // --- Flag: --serve (server mode) ---
 
 if (getFlag("serve")) {
-  const port = parseInt(getFlagValue("port") ?? "3100", 10);
+  const port = parseInt(getFlagValue("port") ?? "3200", 10);
   const host = getFlagValue("host") ?? "0.0.0.0";
 
   const { loadAccessConfig } = await import("./access.js");

@@ -24,7 +24,7 @@
 | Separate frontend SPA | `web/` dir, Vite + React, deploys independently | Frontend on CDN (Cloudflare Pages), backend on VPS — decoupled scaling |
 | Token auth via access.yaml | SHA-256 hashed tokens, constant-time comparison | Simple, no external auth service, hot-reloadable, secure at rest |
 | Per-user session isolation | Sessions stored under `sessions/{user}/` | No cross-user data leakage, supports per-user cost caps |
-| Default port 3100 for serve | Not 3000 (common conflict) | Avoids collision with Vite dev server and other common services |
+| Default port 3200 for serve | Not 3000 (common conflict) | Avoids collision with Vite dev server and other common services |
 
 ## Agent Definition
 

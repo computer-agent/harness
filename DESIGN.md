@@ -4,7 +4,7 @@ Agent runtime with full system prompt control. Two interfaces, one core.
 
 ```
 Terminal TUI:  mastersof-ai [--agent x]           Single user, local, React/Ink
-Web UI:        mastersof-ai --serve [--port 3100] Multi-user, token auth, Fastify + React SPA
+Web UI:        mastersof-ai --serve [--port 3200] Multi-user, token auth, Fastify + React SPA
 ```
 
 Both share: agent loading, IDENTITY.md parsing, Claude Agent SDK, MCP tools, sub-agents, sessions, memory.
@@ -61,7 +61,7 @@ Detailed documentation for each area:
 ```bash
 npx tsx bin/mastersof-ai.js                         # TUI with default agent
 npx tsx bin/mastersof-ai.js --agent analyst          # TUI with specific agent
-npx tsx bin/mastersof-ai.js --serve                  # Web server on port 3100
+npx tsx bin/mastersof-ai.js --serve                  # Web server on port 3200
 npx tsx bin/mastersof-ai.js --serve --port 5000      # Custom port
 npx tsx bin/mastersof-ai.js --agent analyst --sandbox # Bubblewrap sandbox
 npx tsx bin/mastersof-ai.js --card                   # Output Agent Card JSON

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Integration test: validates web frontend API calls against the running backend.
-# Requires: backend running on :3100 (mastersof-ai --serve)
+# Requires: backend running on :3200 (mastersof-ai --serve)
 #
 # Usage: bash web/test-integration.sh
 
 set -uo pipefail
 
-BACKEND="http://localhost:3100"
+BACKEND="http://localhost:3200"
 VALID_TOKEN="b3f88d0b-e226-486e-b0f6-80a5b98535cc"
 INVALID_TOKEN="bad-token-12345"
 PASS=0

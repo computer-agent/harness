@@ -1,11 +1,11 @@
 // Ember conversation flow test — tests multi-turn tool use
 // Usage: node web/test-ember-flow.mjs
-// Requires: backend running on :3100
+// Requires: backend running on :3200
 
 import { WebSocket } from "ws";
 
 const TOKEN = "b3f88d0b-e226-486e-b0f6-80a5b98535cc";
-const WS_URL = `ws://localhost:3100/ws?token=${TOKEN}`;
+const WS_URL = `ws://localhost:3200/ws?token=${TOKEN}`;
 const TIMEOUT = 120_000; // 2 minutes — tool use can be slow
 
 function connectAndSubscribe() {

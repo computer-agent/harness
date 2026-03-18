@@ -294,7 +294,7 @@ mastersof-ai --resume [name|#N]        Resume a session (TUI)
 mastersof-ai --sandbox                 Run in bubblewrap sandbox
 mastersof-ai --list-agents             Show available agents with metadata
 mastersof-ai --init                    Force first-run setup
-mastersof-ai --serve                   Start web UI server (port 3100)
+mastersof-ai --serve                   Start web UI server (port 3200)
 mastersof-ai --serve --port 5000       Custom port
 mastersof-ai --serve --host 127.0.0.1  Bind to specific host
 mastersof-ai --card                    Output A2A Agent Card JSON and exit

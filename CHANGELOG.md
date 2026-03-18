@@ -15,7 +15,7 @@ The harness now has a dual-interface architecture: the original terminal TUI for
 - 55 unit tests covering frontmatter parsing, tool filtering, and agent context
 
 **Phase 2: Serve Mode Backend**
-- `--serve` starts a Fastify HTTP/WebSocket server (default port 3100)
+- `--serve` starts a Fastify HTTP/WebSocket server (default port 3200)
 - REST API: agent roster, session CRUD, usage tracking
 - WebSocket: real-time streaming (text tokens, thinking tokens, tool calls, sub-agent progress)
 - Token-based authentication via `~/.mastersof-ai/access.yaml` (SHA-256 hashed tokens)
