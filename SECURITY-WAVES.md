@@ -157,37 +157,114 @@ Must address all three SSRF hardening gaps:
 
 ---
 
-## Wave 5: Process Isolation + Partner Onboarding — NOT STARTED
+## Wave 5: Process Isolation + Partner Onboarding — COMPLETE (2026-03-18)
 
-Depends on Waves 1-4. ~4-6 weeks.
+See `PROGRESS.json` for detailed validation. 9 implementation tasks + 15 review-fix tasks, 238 tests pass.
 
-| Task | Description |
-|------|-------------|
-| W5-T01 | IPC protocol design (start/message/interrupt/stream/result) |
-| W5-T02 | Session worker process (fork per session) (~400 lines) |
-| W5-T03 | Refactor handleMessage to dispatch via IPC (~300 lines) |
-| W5-T04 | Per-worker env injection (per-user credentials) (~50 lines) |
-| W5-T05 | Per-user stateDir/proposalsDir isolation (~30 lines) |
-| W5-T06 | Per-user concurrent query mutex (~30 lines) |
-| W5-T07 | Create partner access tokens + Tailscale invites (ops) |
-| W5-T08 | Test multi-user concurrent sessions |
-| W5-T09 | Docs: partner onboarding guide |
+### What was done (implementation)
+- W5-T01: `src/ipc-protocol.ts` — discriminated union IPC types with type guards
+- W5-T02: `src/session-worker.ts` — child process entry point (fork per session, SDK query isolation)
+- W5-T03: `src/serve.ts` + `src/worker-manager.ts` — handleMessage dispatches via IPC, WorkerManager lifecycle
+- W5-T04: Per-worker env injection via fork env option (buildShellEnv + ANTHROPIC_API_KEY passthrough)
+- W5-T05: `src/agent-context.ts` — per-user proposalsDir: `state/{agent}/proposals/{userId}/`
+- W5-T06: `src/query-mutex.ts` — per-user concurrent query serialization
+- W5-T07: `src/access.ts` — `generateAccessToken()` for partner token generation
+- W5-T08: `src/session-worker.test.ts` — 23 tests (IPC, mutex, tokens, proposalsDir)
+- W5-T09: `docs/partner-onboarding.md` — full partner onboarding guide
+
+### Review hardening (3 parallel reviews: security, engineering, architecture)
+
+15 fixes applied from review findings:
+
+| Fix | Sev | Source | Description |
+|-----|-----|--------|-------------|
+| P0-1 | CRIT | Eng | Worker exit code 0 → promise never settles → mutex locked forever. Fixed: `settled` flag + `safeResolve`/`safeReject` |
+| P0-3 | CRIT | Eng | `process.send` throws `ERR_IPC_CHANNEL_CLOSED` → infinite recursion. Fixed: try/catch in `send()` helper |
+| P1-1 | HIGH | Eng | Dangling SIGKILL timer in `kill()`. Fixed: `killTimer` on state, cleared in exit handler |
+| P1-2 | HIGH | Eng | QueryMutex broken under 3+ concurrent waiters (while-loop TOCTOU). Fixed: FIFO queue pattern |
+| P1-3 | HIGH | Eng | Worker allows concurrent `handleMessage`. Fixed: guard rejects if `activeQuery !== null` |
+| P1-4 | HIGH | Eng | `unhandledRejection` handler doesn't exit. Fixed: `process.exit(1)` |
+| P2-2 | MED | Eng | stdio line-buffering garbles logs. Fixed: `"inherit"` instead of pipe |
+| P2-4 | MED | Eng | Missing tsx loader in forked workers. Fixed: `execArgv: safeExecArgv` |
+| P2-6 | MED | Eng | 100ms shutdown too short. Fixed: 5s timeout + `shuttingDown` flag |
+| F1 | HIGH | Sec | Fork bomb — re-subscribe orphans workers, no max cap. Fixed: kill prev + `maxWorkers` cap (20) |
+| F2 | HIGH | Sec | IPC frame type not validated → WS injection. Fixed: allowlist of known frame types |
+| F3 | HIGH | Sec | `execArgv` leaks `--inspect` → debug port RCE. Fixed: filter `--inspect`/`--debug` flags |
+| F5 | MED | Sec | Raw token in HTTP rate limiter key. Fixed: `hashToken()` before use |
+| F7 | MED | Sec | Roster broadcast leaks all agents to all users. Fixed: per-user filtered broadcast |
+| A1 | IMP | Arch | `buildSystemPrompt` re-parses manifest every message. Noted: manifest cached at init, full fix deferred to Wave 6 |
+
+### Verification checklist (Wave 5)
+- [x] IPC messages round-trip through JSON serialization
+- [x] Worker spawned per conversation, killed on WS disconnect
+- [x] Worker crash sends error to WebSocket (non-zero exit rejects promise)
+- [x] Worker exit code 0 settles the result promise (P0-1)
+- [x] `process.send` failure does not crash the worker (P0-3)
+- [x] Worker env contains only safe base vars + agent credentials
+- [x] Per-user proposalsDir isolated (state/{agent}/proposals/{userId}/)
+- [x] Concurrent queries serialized by FIFO queue mutex (P1-2)
+- [x] 3+ concurrent waiters execute in strict FIFO order
+- [x] Worker rejects concurrent handleMessage (P1-3)
+- [x] Re-subscribe kills previous worker (F1)
+- [x] maxWorkers cap enforced (F1)
+- [x] IPC frame type validated against allowlist before WS relay (F2)
+- [x] execArgv filtered — no --inspect/--debug in workers (F3)
+- [x] Rate limiter key uses hashed token (F5)
+- [x] Roster broadcast filtered per user access (F7)
+- [x] generateAccessToken produces unique, cryptographically random tokens
+- [x] Partner onboarding documented end-to-end
+
+### Validation sprint pending (Wave 5.1)
+See `SECURITY-WAVES-5.1-5.2.md` for detailed validation tasks. 5 tasks covering integration tests for all 15 review fixes. Must pass before merge.
 
 ---
 
-## Wave 6: Observability + CLI DX — ongoing
+## Wave 6: Process Isolation Hardening — NOT STARTED
+
+Depends on Wave 5. ~1-2 weeks. Addresses deferred findings from the Wave 5 security/engineering/architecture reviews.
+
+| Task | Files | Description | Source |
+|------|-------|-------------|--------|
+| W6-T01 | New `src/sdk-stream.ts`, `src/session-worker.ts`, `src/components/App.tsx` | SDK stream processing shared abstraction — eliminates `as any` duplication between worker and TUI (~200 lines new, ~100 removed each) | Arch #2 |
+| W6-T02 | `src/session-worker.ts`, `src/serve.ts` | Double error on worker init failure — single error path, no duplicate messages to client (~15 lines) | Arch #5 |
+| W6-T03 | `src/query-mutex.ts`, `src/serve.ts`, tests | QueryMutex timeout — `acquire(key, timeoutMs)` throws on timeout, waiter removed from queue (~30 lines) | Sec F4 |
+| W6-T04 | `src/access.ts`, `src/serve.ts` | Token revocation `safeCompare` — export and use timing-safe comparison for hash check (~10 lines) | Sec F6 |
+| W6-T05 | `src/serve.ts` or new `src/ws-protocol.ts` | WebSocket message schema validation — Zod schema for WsClientMessage, reject invalid shapes (~50 lines) | Sec F8 |
+| W6-T06 | `src/serve.ts`, `src/worker-manager.ts` | Worker ready timeout — kill worker + reject if no "ready" within 30s (~25 lines) | Sec F10 |
+| W6-T07 | `src/serve.ts` | Pending approval cleanup on worker crash — clear map, send rejection frames to client (~15 lines) | Eng P2-3 |
+| W6-T08 | `src/config.ts`, `src/serve.ts` | Configurable `serve.maxWorkers` in HarnessConfig — default 20, config.yaml override (~15 lines) | Eng P3-3 |
+| W6-T09 | `src/health.ts`, `src/serve.ts` | Worker pool size in `/health/deep` — `workerPool: { active, max, utilization }` (~20 lines) | Arch #3 |
+
+### Dependencies
+- W6-T09 depends on W6-T08 (needs maxWorkers in config to report the cap)
+- All others are independent
+
+### Verification checklist (Wave 6)
+- [ ] SdkStreamProcessor used by both session-worker.ts and App.tsx
+- [ ] Worker init failure produces exactly one error to client
+- [ ] Mutex acquire with timeout throws and releases correctly
+- [ ] Token revocation uses timing-safe comparison
+- [ ] Malformed WS messages rejected with structured error
+- [ ] Worker ready timeout kills stuck workers within 30s
+- [ ] Worker crash clears pending approvals and notifies client
+- [ ] `serve.maxWorkers` configurable via config.yaml
+- [ ] `/health/deep` reports worker pool utilization
+
+---
+
+## Wave 7: Observability + CLI DX — ongoing
 
 | Task | Description |
 |------|-------------|
-| W6-T01 | `mastersof-ai credentials check --agent <name>` |
-| W6-T02 | `mastersof-ai access create --name <name> --agents <list>` |
-| W6-T03 | `mastersof-ai status <agent>` (reads runs.jsonl) |
-| W6-T04 | `mastersof-ai preflight --agent <name>` (validate full config) |
-| W6-T05 | Token rotation mechanism in access.yaml |
+| W7-T01 | `mastersof-ai credentials check --agent <name>` |
+| W7-T02 | `mastersof-ai access create --name <name> --agents <list>` |
+| W7-T03 | `mastersof-ai status <agent>` (reads runs.jsonl) |
+| W7-T04 | `mastersof-ai preflight --agent <name>` (validate full config) |
+| W7-T05 | Token rotation mechanism in access.yaml |
 
-## Wave 7: Documentation Polish — ongoing
+## Wave 8: Documentation Polish — ongoing
 
 - Architecture refresh (DESIGN.md, docs/)
-- CLAUDE.md update for new modules (env-safety, url-safety, credentials, egress-proxy, content-safety)
+- CLAUDE.md update for new modules (env-safety, url-safety, credentials, egress-proxy, content-safety, ipc-protocol, session-worker, worker-manager, query-mutex)
 - CHANGELOG
 - Full security narrative for audit

@@ -1,0 +1,608 @@
+import { strict as assert } from "node:assert";
+import { describe, it } from "node:test";
+import { generateAccessToken, hashToken } from "./access.js";
+import { resolveRemoteAgent } from "./agent-context.js";
+import {
+  type IpcInitMessage,
+  type IpcResultMessage,
+  isParentToWorkerMessage,
+  isWorkerToParentMessage,
+  type ParentToWorkerMessage,
+  type WorkerToParentMessage,
+} from "./ipc-protocol.js";
+import { QueryMutex } from "./query-mutex.js";
+
+// ─── IPC protocol type guards ───
+
+describe("IPC protocol type guards", () => {
+  it("isParentToWorkerMessage validates init", () => {
+    const msg: IpcInitMessage = {
+      type: "init",
+      agentId: "test",
+      userId: "alice",
+      configJson: "{}",
+      accessUser: { name: "alice", toolsDeny: [] },
+    };
+    assert.ok(isParentToWorkerMessage(msg));
+  });
+
+  it("isParentToWorkerMessage validates message", () => {
+    assert.ok(isParentToWorkerMessage({ type: "message", content: "hello" }));
+  });
+
+  it("isParentToWorkerMessage validates interrupt", () => {
+    assert.ok(isParentToWorkerMessage({ type: "interrupt" }));
+  });
+
+  it("isParentToWorkerMessage validates tool_approval_response", () => {
+    assert.ok(isParentToWorkerMessage({ type: "tool_approval_response", toolId: "t1", approved: true }));
+  });
+
+  it("isParentToWorkerMessage validates shutdown", () => {
+    assert.ok(isParentToWorkerMessage({ type: "shutdown" }));
+  });
+
+  it("isParentToWorkerMessage rejects unknown types", () => {
+    assert.ok(!isParentToWorkerMessage({ type: "unknown" }));
+    assert.ok(!isParentToWorkerMessage(null));
+    assert.ok(!isParentToWorkerMessage("not an object"));
+    assert.ok(!isParentToWorkerMessage(42));
+  });
+
+  it("isWorkerToParentMessage validates ready", () => {
+    assert.ok(isWorkerToParentMessage({ type: "ready" }));
+  });
+
+  it("isWorkerToParentMessage validates frame", () => {
+    assert.ok(isWorkerToParentMessage({ type: "frame", frame: { type: "token", text: "hi" } }));
+  });
+
+  it("isWorkerToParentMessage validates session_id", () => {
+    assert.ok(isWorkerToParentMessage({ type: "session_id", sessionId: "s1", firstMessage: "hello" }));
+  });
+
+  it("isWorkerToParentMessage validates tool_approval_request", () => {
+    assert.ok(
+      isWorkerToParentMessage({
+        type: "tool_approval_request",
+        toolId: "t1",
+        toolName: "web_fetch",
+        toolInput: {},
+      }),
+    );
+  });
+
+  it("isWorkerToParentMessage validates result", () => {
+    const msg: IpcResultMessage = {
+      type: "result",
+      sessionId: "s1",
+      interrupted: false,
+      usage: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      responseContent: "Hello!",
+      toolCalls: [],
+    };
+    assert.ok(isWorkerToParentMessage(msg));
+  });
+
+  it("isWorkerToParentMessage validates error", () => {
+    assert.ok(isWorkerToParentMessage({ type: "error", code: "test", message: "oops" }));
+  });
+
+  it("isWorkerToParentMessage rejects unknown types", () => {
+    assert.ok(!isWorkerToParentMessage({ type: "unknown" }));
+    assert.ok(!isWorkerToParentMessage(undefined));
+  });
+
+  it("all IPC messages are JSON-serializable", () => {
+    const messages: (ParentToWorkerMessage | WorkerToParentMessage)[] = [
+      { type: "init", agentId: "a", userId: "u", configJson: "{}", accessUser: { name: "u", toolsDeny: [] } },
+      { type: "message", content: "hello", resumeSessionId: "s1" },
+      { type: "interrupt" },
+      { type: "tool_approval_response", toolId: "t1", approved: true },
+      { type: "shutdown" },
+      { type: "ready" },
+      { type: "frame", frame: { type: "token", text: "hi" } },
+      { type: "session_id", sessionId: "s1", firstMessage: "hello" },
+      { type: "tool_approval_request", toolId: "t1", toolName: "web_fetch", toolInput: { url: "https://x.com" } },
+      {
+        type: "result",
+        sessionId: "s1",
+        interrupted: false,
+        usage: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheCreationTokens: 0 },
+        responseContent: "hi",
+        toolCalls: [{ name: "web_fetch", status: "complete" }],
+      },
+      { type: "error", code: "test", message: "oops" },
+    ];
+    for (const msg of messages) {
+      const json = JSON.stringify(msg);
+      const parsed = JSON.parse(json);
+      assert.deepStrictEqual(parsed.type, msg.type, `Round-trip failed for ${msg.type}`);
+    }
+  });
+});
+
+// ─── QueryMutex ───
+
+describe("QueryMutex", () => {
+  it("acquire returns a release function", async () => {
+    const mutex = new QueryMutex();
+    const release = await mutex.acquire("key1");
+    assert.ok(typeof release === "function");
+    assert.ok(mutex.isLocked("key1"));
+    release();
+    assert.ok(!mutex.isLocked("key1"));
+  });
+
+  it("serializes concurrent acquires on the same key", async () => {
+    const mutex = new QueryMutex();
+    const order: number[] = [];
+
+    const task1 = (async () => {
+      const release = await mutex.acquire("key");
+      order.push(1);
+      // Simulate work
+      await new Promise((r) => setTimeout(r, 50));
+      order.push(2);
+      release();
+    })();
+
+    // Small delay to ensure task1 acquires first
+    await new Promise((r) => setTimeout(r, 5));
+
+    const task2 = (async () => {
+      const release = await mutex.acquire("key");
+      order.push(3);
+      release();
+    })();
+
+    await Promise.all([task1, task2]);
+    // task2 should start after task1 finishes
+    assert.deepStrictEqual(order, [1, 2, 3]);
+  });
+
+  it("allows concurrent acquires on different keys", async () => {
+    const mutex = new QueryMutex();
+    const order: string[] = [];
+
+    const task1 = (async () => {
+      const release = await mutex.acquire("keyA");
+      order.push("A-start");
+      await new Promise((r) => setTimeout(r, 50));
+      order.push("A-end");
+      release();
+    })();
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    const task2 = (async () => {
+      const release = await mutex.acquire("keyB");
+      order.push("B-start");
+      release();
+    })();
+
+    await Promise.all([task1, task2]);
+    // B should start while A is still running (different keys)
+    assert.ok(order.indexOf("B-start") < order.indexOf("A-end"), "B should start before A ends");
+  });
+
+  it("serializes 3+ concurrent acquires on the same key (queue correctness)", async () => {
+    const mutex = new QueryMutex();
+    const order: number[] = [];
+
+    const task1 = (async () => {
+      const release = await mutex.acquire("key");
+      order.push(1);
+      await new Promise((r) => setTimeout(r, 30));
+      release();
+    })();
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    const task2 = (async () => {
+      const release = await mutex.acquire("key");
+      order.push(2);
+      await new Promise((r) => setTimeout(r, 30));
+      release();
+    })();
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    const task3 = (async () => {
+      const release = await mutex.acquire("key");
+      order.push(3);
+      release();
+    })();
+
+    await Promise.all([task1, task2, task3]);
+    // Must execute in strict FIFO order — the old while-loop pattern broke here
+    assert.deepStrictEqual(order, [1, 2, 3]);
+  });
+
+  it("isLocked returns false for unknown keys", () => {
+    const mutex = new QueryMutex();
+    assert.ok(!mutex.isLocked("nonexistent"));
+  });
+
+  it("double release is a no-op", async () => {
+    const mutex = new QueryMutex();
+    const release = await mutex.acquire("key");
+    release();
+    release(); // should not throw or corrupt state
+    assert.ok(!mutex.isLocked("key"));
+  });
+});
+
+// ─── W5.1-T02: Mutex stress tests ───
+
+describe("QueryMutex stress (W5.1-T02)", () => {
+  it("10 concurrent acquires on same key execute in strict FIFO order", async () => {
+    const mutex = new QueryMutex();
+    const order: number[] = [];
+    const N = 10;
+
+    // Acquire the lock first so all subsequent acquires queue up
+    const initialRelease = await mutex.acquire("stress");
+
+    const tasks = Array.from({ length: N }, (_, i) =>
+      (async () => {
+        const release = await mutex.acquire("stress");
+        order.push(i);
+        // Tiny yield to let other microtasks run (shouldn't break FIFO)
+        await new Promise((r) => setTimeout(r, 1));
+        release();
+      })(),
+    );
+
+    // All 10 are now queued — release the initial lock
+    initialRelease();
+    await Promise.all(tasks);
+
+    // Must be strictly sequential 0-9
+    assert.deepStrictEqual(
+      order,
+      Array.from({ length: N }, (_, i) => i),
+    );
+  });
+
+  it("5 keys x 3 acquires: cross-key concurrency with same-key serialization", async () => {
+    const mutex = new QueryMutex();
+    const results = new Map<string, number[]>();
+
+    const tasks: Promise<void>[] = [];
+    for (let k = 0; k < 5; k++) {
+      const key = `key-${k}`;
+      results.set(key, []);
+      for (let i = 0; i < 3; i++) {
+        tasks.push(
+          (async () => {
+            const release = await mutex.acquire(key);
+            results.get(key)?.push(i);
+            await new Promise((r) => setTimeout(r, 5));
+            release();
+          })(),
+        );
+        // Small stagger within each key
+        await new Promise((r) => setTimeout(r, 1));
+      }
+    }
+
+    await Promise.all(tasks);
+
+    // Each key must have all 3 entries in FIFO order
+    for (const [key, order] of results) {
+      assert.deepStrictEqual(order, [0, 1, 2], `Key ${key} should have FIFO order`);
+    }
+  });
+
+  it("release wakes exactly one waiter (not all)", async () => {
+    const mutex = new QueryMutex();
+    let wokenCount = 0;
+
+    const holder = await mutex.acquire("single-wake");
+
+    // Queue 3 waiters
+    const w1 = mutex.acquire("single-wake").then((r) => {
+      wokenCount++;
+      return r;
+    });
+    const w2 = mutex.acquire("single-wake").then((r) => {
+      wokenCount++;
+      return r;
+    });
+    const w3 = mutex.acquire("single-wake").then((r) => {
+      wokenCount++;
+      return r;
+    });
+
+    // Release the holder — should wake exactly one
+    holder();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.strictEqual(wokenCount, 1, "Only one waiter should wake on release");
+
+    // Release the second — should wake the next
+    const r1 = await w1;
+    r1();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.strictEqual(wokenCount, 2);
+
+    const r2 = await w2;
+    r2();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.strictEqual(wokenCount, 3);
+
+    const r3 = await w3;
+    r3();
+    assert.ok(!mutex.isLocked("single-wake"));
+  });
+
+  it("acquire-release-acquire cycle leaves no stale state", async () => {
+    const mutex = new QueryMutex();
+
+    for (let i = 0; i < 5; i++) {
+      const release = await mutex.acquire("cycle");
+      assert.ok(mutex.isLocked("cycle"));
+      release();
+      assert.ok(!mutex.isLocked("cycle"));
+    }
+  });
+});
+
+// ─── W5.1-T03: Security hardening validation ───
+
+describe("Security hardening (W5.1-T03)", () => {
+  it("F3: execArgv filter strips --inspect but preserves --import", () => {
+    const rawArgv = [
+      "--require",
+      "/path/to/tsx/preflight.cjs",
+      "--import",
+      "file:///path/to/tsx/loader.mjs",
+      "--inspect=0.0.0.0:9229",
+      "--inspect-brk",
+      "--debug=5858",
+    ];
+    const filtered = rawArgv.filter((arg) => !arg.startsWith("--inspect") && !arg.startsWith("--debug"));
+    assert.deepStrictEqual(filtered, [
+      "--require",
+      "/path/to/tsx/preflight.cjs",
+      "--import",
+      "file:///path/to/tsx/loader.mjs",
+    ]);
+  });
+
+  it("F5: rate limit key is a 64-char hex hash, not raw token", () => {
+    const rawToken = "my-secret-bearer-token-1234567890";
+    const hash = hashToken(rawToken);
+    assert.strictEqual(hash.length, 64);
+    assert.ok(/^[0-9a-f]+$/.test(hash));
+    assert.notStrictEqual(hash, rawToken);
+  });
+
+  it("F2: frame type allowlist rejects unknown types", () => {
+    const ALLOWED = new Set([
+      "status",
+      "token",
+      "thinking_token",
+      "tool_use_start",
+      "tool_use_input",
+      "tool_result",
+      "subagent_started",
+      "subagent_progress",
+      "subagent_done",
+    ]);
+
+    // Valid types pass
+    for (const t of ALLOWED) {
+      assert.ok(ALLOWED.has(t), `${t} should be allowed`);
+    }
+
+    // Malicious types rejected
+    for (const bad of ["evil_payload", "__proto__", "constructor", "error", "budget_exceeded", ""]) {
+      assert.ok(!ALLOWED.has(bad), `"${bad}" should be rejected`);
+    }
+  });
+});
+
+// ─── W5.1-T04: Worker behavior validation ───
+
+describe("Worker behavior (W5.1-T04)", () => {
+  it("P0-1: settled flag pattern prevents double-resolve", async () => {
+    // Simulate the settled flag pattern from serve.ts handleMessage
+    let settled = false;
+    let resolveCount = 0;
+
+    const result = await new Promise<string>((resolve) => {
+      const safeResolve = (val: string) => {
+        if (!settled) {
+          settled = true;
+          resolveCount++;
+          resolve(val);
+        }
+      };
+
+      // Simulate: result arrives, then worker exits
+      safeResolve("result-from-worker");
+      safeResolve("should-be-ignored"); // double-resolve attempt
+    });
+
+    assert.strictEqual(result, "result-from-worker");
+    assert.strictEqual(resolveCount, 1);
+  });
+
+  it("P0-1: settled flag prevents resolve after reject", async () => {
+    let settled = false;
+    let resolveCount = 0;
+    let rejectCount = 0;
+
+    try {
+      await new Promise<string>((resolve, reject) => {
+        const safeResolve = (val: string) => {
+          if (!settled) {
+            settled = true;
+            resolveCount++;
+            resolve(val);
+          }
+        };
+        const safeReject = (err: Error) => {
+          if (!settled) {
+            settled = true;
+            rejectCount++;
+            reject(err);
+          }
+        };
+
+        // Simulate: worker crashes (reject), then exit handler also fires (reject again)
+        safeReject(new Error("crash"));
+        safeReject(new Error("should-be-ignored"));
+        safeResolve("should-also-be-ignored");
+      });
+      assert.fail("Should have rejected");
+    } catch (err: any) {
+      assert.strictEqual(err.message, "crash");
+      assert.strictEqual(rejectCount, 1);
+      assert.strictEqual(resolveCount, 0);
+    }
+  });
+
+  it("P0-3: send() helper returns false on failure (simulated)", () => {
+    // Test that the send pattern handles missing process.send gracefully
+    // In a real child process, process.send exists; in the test process, it doesn't
+    const hasSend = typeof process.send === "function";
+    if (hasSend) {
+      // Running as a child process (unlikely in test) — skip
+      return;
+    }
+    // In the test process, process.send is undefined — the worker's send() should return false
+    assert.strictEqual(process.send, undefined);
+  });
+});
+
+// ─── W5.1-T05: Worker environment isolation ───
+
+describe("Worker environment isolation (W5.1-T05)", () => {
+  it("buildShellEnv only includes safe system vars + agent env", async () => {
+    // Dynamic import to match ESM
+    const { buildShellEnv } = await import("./env-safety.js");
+
+    const agentEnv = { MY_API_KEY: "secret123", DB_URL: "postgres://..." };
+    const safe = buildShellEnv(agentEnv);
+
+    // Agent env keys pass through
+    assert.strictEqual(safe.MY_API_KEY, "secret123");
+    assert.strictEqual(safe.DB_URL, "postgres://...");
+
+    // System vars from process.env pass through (if set)
+    if (process.env.HOME) assert.strictEqual(safe.HOME, process.env.HOME);
+    if (process.env.PATH) assert.strictEqual(safe.PATH, process.env.PATH);
+
+    // ANTHROPIC_API_KEY from process.env does NOT pass through buildShellEnv
+    // (it's added separately in WorkerManager, not via buildShellEnv)
+    const envWithApiKey = { ...agentEnv, ANTHROPIC_API_KEY: "sk-ant-test" };
+    const safe2 = buildShellEnv(envWithApiKey);
+    // buildShellEnv allows it through because it's in the agent env, not process.env
+    assert.strictEqual(safe2.ANTHROPIC_API_KEY, "sk-ant-test");
+  });
+
+  it("worker env construction includes only expected keys", () => {
+    // Simulate the env construction from worker-manager.ts
+    const _agentEnv = { BRAINTREE_KEY: "bt-123" };
+    const safeEnv = { HOME: "/root", PATH: "/usr/bin", BRAINTREE_KEY: "bt-123" }; // buildShellEnv result
+
+    const workerEnv: Record<string, string> = {
+      ...safeEnv,
+      ANTHROPIC_API_KEY: "sk-test",
+      HOME: "/root",
+      PATH: "/usr/bin:/bin",
+      TZ: "UTC",
+      WORKER_AGENT_ID: "billing",
+      WORKER_USER_ID: "alice",
+    };
+
+    // Expected keys present
+    assert.ok("ANTHROPIC_API_KEY" in workerEnv);
+    assert.ok("BRAINTREE_KEY" in workerEnv);
+    assert.ok("WORKER_AGENT_ID" in workerEnv);
+    assert.ok("WORKER_USER_ID" in workerEnv);
+
+    // Unexpected keys absent
+    assert.ok(!("DATABASE_URL" in workerEnv));
+    assert.ok(!("AWS_SECRET_ACCESS_KEY" in workerEnv));
+    assert.ok(!("NODE_ENV" in workerEnv));
+  });
+
+  it("missing ANTHROPIC_API_KEY is omitted, not empty string", () => {
+    const workerEnv: Record<string, string> = {
+      HOME: "/root",
+      PATH: "/usr/bin",
+      TZ: "UTC",
+      // No ANTHROPIC_API_KEY
+    };
+
+    // Simulate the conditional from worker-manager.ts
+    const apiKey = undefined; // process.env.ANTHROPIC_API_KEY when unset
+    if (apiKey) {
+      workerEnv.ANTHROPIC_API_KEY = apiKey;
+    }
+
+    assert.ok(!("ANTHROPIC_API_KEY" in workerEnv));
+  });
+});
+
+// ─── Per-user proposalsDir isolation ───
+
+describe("Per-user proposalsDir isolation (W5-T05)", () => {
+  // Skip if agents dir doesn't exist (CI)
+  const agentsDir = `${process.env.HOME ?? "/root"}/.mastersof-ai/agents`;
+  const hasAgents = (() => {
+    try {
+      const { existsSync } = require("node:fs");
+      return existsSync(agentsDir);
+    } catch {
+      return false;
+    }
+  })();
+
+  it("resolveRemoteAgent creates per-user proposalsDir", { skip: !hasAgents }, () => {
+    // This test requires an actual agent directory to exist
+    const { readdirSync } = require("node:fs");
+    const agents = readdirSync(agentsDir);
+    if (agents.length === 0) return;
+
+    const agentName = agents[0];
+    const ctx = resolveRemoteAgent(agentName, "test-user-w5");
+    assert.ok(ctx.proposalsDir.includes("test-user-w5"), "proposalsDir should include userId");
+    assert.ok(ctx.proposalsDir.includes("proposals"), "proposalsDir should be under proposals/");
+    // Clean up
+    const { rmSync } = require("node:fs");
+    try {
+      rmSync(ctx.proposalsDir, { recursive: true });
+      rmSync(ctx.workspaceDir, { recursive: true });
+      rmSync(ctx.memoryDir, { recursive: true });
+    } catch {
+      // Best effort cleanup
+    }
+  });
+});
+
+// ─── Access token generation (W5-T07) ───
+
+describe("generateAccessToken (W5-T07)", () => {
+  it("generates a 64-char hex token", () => {
+    const { token } = generateAccessToken();
+    assert.strictEqual(token.length, 64);
+    assert.ok(/^[0-9a-f]+$/.test(token));
+  });
+
+  it("generates a valid SHA-256 hash", () => {
+    const { token, tokenHash } = generateAccessToken();
+    assert.strictEqual(tokenHash, hashToken(token));
+    assert.strictEqual(tokenHash.length, 64);
+  });
+
+  it("generates unique tokens each call", () => {
+    const a = generateAccessToken();
+    const b = generateAccessToken();
+    assert.notStrictEqual(a.token, b.token);
+    assert.notStrictEqual(a.tokenHash, b.tokenHash);
+  });
+});

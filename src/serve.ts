@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import fastifyCors from "@fastify/cors";
 import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyWebsocket from "@fastify/websocket";
@@ -16,13 +15,12 @@ import {
   lookupUser,
   userCanAccessAgent,
 } from "./access.js";
-import { buildOptions, buildSystemPrompt, sendMessage } from "./agent.js";
 import { type AgentContext, getAgentsDir, listAgents, resolveAgent, resolveRemoteAgent } from "./agent-context.js";
 import { getConfigPath, getHomeDir, type HarnessConfig, loadConfig } from "./config.js";
 import { CostTracker } from "./cost.js";
-import { loadAgentEnv } from "./env.js";
 import { classifyError } from "./errors.js";
 import { HealthMonitor } from "./health.js";
+import type { IpcResultMessage, WorkerToParentMessage } from "./ipc-protocol.js";
 import { Logger } from "./logger.js";
 import type { AgentManifest } from "./manifest.js";
 import { MessageBuffer } from "./message-buffer.js";
@@ -37,8 +35,8 @@ import {
   recordConsent,
   runRetentionCleanup,
 } from "./privacy.js";
+import { QueryMutex } from "./query-mutex.js";
 import { RateLimiter } from "./rate-limit.js";
-import { REMOTE_SANDBOX_DEFAULTS, type RemoteSandboxPolicy } from "./sandbox.js";
 import {
   createSessionMeta,
   deleteSession,
@@ -47,9 +45,10 @@ import {
   saveSession,
   touchSession,
 } from "./sessions.js";
-import type { WsAssistantMessage, WsClientMessage, WsToken, WsToolUseStart } from "./types/ws.js";
+import type { WsAssistantMessage, WsClientMessage } from "./types/ws.js";
 import { UsageTracker } from "./usage.js";
 import { FileWatcher } from "./watcher.js";
+import { WorkerManager } from "./worker-manager.js";
 
 const PKG_VERSION = (() => {
   try {
@@ -79,7 +78,7 @@ interface ActiveConversation {
   agentContext: AgentContext;
   sessionId: string | null;
   sdkSessionConfirmed: boolean; // true after SDK init event confirms the session
-  activeQuery: Query | null;
+  workerKey: string; // W5-T03: key for the session worker process
   messageBuffer: MessageBuffer;
   user: AccessUser;
   pendingApprovals: Map<string, (approved: boolean) => void>;
@@ -182,17 +181,6 @@ function extractWsToken(request: FastifyRequest): WsTokenResult | null {
 
 // W4-T07: Store token hash, not raw token — no raw credentials in memory after auth
 const connectedClients = new Map<WebSocket, { user: AccessUser; tokenHash: string }>();
-
-function broadcastToAll(message: object): void {
-  const payload = JSON.stringify(message);
-  for (const [ws] of connectedClients) {
-    try {
-      ws.send(payload);
-    } catch {
-      // Connection already closed
-    }
-  }
-}
 
 // ─── Route registration ───
 
@@ -478,12 +466,15 @@ async function handleSubscribe(
   // Get or create a message buffer for this conversation
   const messageBuffer = sessionId ? getOrCreateBuffer(msg.agentId, sessionId, user.name) : new MessageBuffer(1000);
 
+  // W5-T03: Worker key uniquely identifies this conversation's worker process
+  const workerKey = `${msg.agentId}:${user.name}:${crypto.randomUUID()}`;
+
   const conversation: ActiveConversation = {
     agentId: msg.agentId,
     agentContext,
     sessionId,
     sdkSessionConfirmed: !!sessionId, // true if subscribing with an existing session ID (from a prior SDK session)
-    activeQuery: null,
+    workerKey,
     messageBuffer,
     user,
     pendingApprovals: new Map(),
@@ -517,287 +508,280 @@ async function handleMessage(
   config: HarnessConfig,
   usageTracker: UsageTracker,
   costTracker: CostTracker,
+  workerManager: WorkerManager,
+  queryMutex: QueryMutex,
+  logger: Logger,
 ): Promise<void> {
-  const { agentContext, user } = conversation;
+  const { agentContext, user, workerKey } = conversation;
 
-  ws.send(JSON.stringify({ type: "status", status: "thinking" }));
+  // W5-T06: Per-user concurrent query mutex — prevents two messages from running simultaneously
+  const mutexKey = `${conversation.agentId}:${user.name}`;
+  const release = await queryMutex.acquire(mutexKey);
 
-  const { systemPrompt, manifest } = await buildSystemPrompt(agentContext);
-  const toolFilter = manifest.frontmatter.tools ?? undefined;
-  const cwd = agentContext.workspaceDir;
-  const agentEnv = loadAgentEnv(agentContext.agentDir);
+  try {
+    ws.send(JSON.stringify({ type: "status", status: "thinking" }));
 
-  // Only resume if we have a session ID that came from the SDK (not a pre-created REST session).
-  // If resume fails with "No conversation found", retry without resume.
-  let resumeId = conversation.sdkSessionConfirmed ? (conversation.sessionId ?? undefined) : undefined;
+    let userMessagePersisted = false;
 
-  const onToolApproval = async (toolId: string, toolName: string, input: Record<string, unknown>): Promise<boolean> => {
-    return new Promise((resolve) => {
-      conversation.pendingApprovals.set(toolId, resolve);
-      ws.send(
-        JSON.stringify({
-          type: "tool_approval",
-          toolId,
-          toolName,
-          toolInput: input,
-          question: `Allow ${toolName}?`,
-        }),
-      );
+    const persistUserMessage = async () => {
+      if (userMessagePersisted || !conversation.sessionId) return;
+      userMessagePersisted = true;
+      const sessionDirs = sessionDirsForUser(agentContext, user);
+      const userMsg: PersistedMessage = {
+        role: "user",
+        content: msg.content,
+        timestamp: new Date().toISOString(),
+      };
+      await appendMessage(sessionDirs, conversation.sessionId, userMsg);
+    };
+
+    // If resuming an existing session, persist user message immediately
+    if (conversation.sdkSessionConfirmed && conversation.sessionId) {
+      await persistUserMessage();
+    }
+
+    // W5-T03: Dispatch to session worker via IPC instead of in-process SDK query
+    const result = await new Promise<IpcResultMessage>((resolveResult, rejectResult) => {
+      // Handler for messages from the worker — relays frames to WS, captures session/result
+      const workerMessageHandler = async (workerMsg: WorkerToParentMessage) => {
+        try {
+          switch (workerMsg.type) {
+            case "ready":
+              // Worker initialized — send the user message
+              workerManager.sendToWorker(workerKey, {
+                type: "message",
+                content: msg.content,
+                resumeSessionId: conversation.sdkSessionConfirmed ? (conversation.sessionId ?? undefined) : undefined,
+              });
+              break;
+
+            case "frame": {
+              // F2: Validate frame type against allowlist before relaying to WebSocket.
+              // A compromised worker could inject arbitrary JSON — only relay known frame types.
+              const frame = workerMsg.frame;
+              const ALLOWED_FRAME_TYPES = new Set([
+                "status",
+                "token",
+                "thinking_token",
+                "tool_use_start",
+                "tool_use_input",
+                "tool_result",
+                "subagent_started",
+                "subagent_progress",
+                "subagent_done",
+              ]);
+              if (!frame.type || !ALLOWED_FRAME_TYPES.has(frame.type as string)) {
+                logger.warn("session", "worker.frame_rejected", `Rejected unknown frame type: ${frame.type}`, {
+                  details: { workerKey },
+                });
+                break;
+              }
+              if (frame.type === "token" || frame.type === "tool_use_start") {
+                conversation.messageBuffer.push(frame as any);
+              }
+              ws.send(JSON.stringify(frame));
+              break;
+            }
+
+            case "session_id": {
+              const oldSessionId = conversation.sessionId;
+              conversation.sessionId = workerMsg.sessionId;
+              conversation.sdkSessionConfirmed = true;
+              // Delete orphaned buffer entry
+              if (oldSessionId && oldSessionId !== workerMsg.sessionId) {
+                const oldBufKey = bufferKey(conversation.agentId, oldSessionId, user.name);
+                conversationBuffers.delete(oldBufKey);
+              }
+              // Register buffer under real session ID
+              const bKey = bufferKey(conversation.agentId, workerMsg.sessionId, user.name);
+              if (!conversationBuffers.has(bKey)) {
+                conversationBuffers.set(bKey, {
+                  buffer: conversation.messageBuffer,
+                  lastActivity: Date.now(),
+                });
+              }
+              // Save session metadata
+              const sessionDirs = sessionDirsForUser(agentContext, user);
+              const meta = createSessionMeta(workerMsg.sessionId, workerMsg.firstMessage);
+              await saveSession(sessionDirs, meta);
+              await persistUserMessage();
+              break;
+            }
+
+            case "tool_approval_request":
+              // Store resolver that sends IPC response back to worker
+              conversation.pendingApprovals.set(workerMsg.toolId, (approved: boolean) => {
+                workerManager.sendToWorker(workerKey, {
+                  type: "tool_approval_response",
+                  toolId: workerMsg.toolId,
+                  approved,
+                });
+              });
+              ws.send(
+                JSON.stringify({
+                  type: "tool_approval",
+                  toolId: workerMsg.toolId,
+                  toolName: workerMsg.toolName,
+                  toolInput: workerMsg.toolInput,
+                  question: `Allow ${workerMsg.toolName}?`,
+                }),
+              );
+              break;
+
+            case "result":
+              safeResolve(workerMsg);
+              break;
+
+            case "error":
+              ws.send(
+                JSON.stringify({
+                  type: "error",
+                  code: workerMsg.code,
+                  message: workerMsg.message,
+                }),
+              );
+              break;
+          }
+        } catch (err) {
+          logger.error("session", "worker.handler_error", `Worker message handler error: ${err}`, {
+            details: { workerKey },
+          });
+        }
+      };
+
+      // P0-1 fix: Worker exit must ALWAYS settle the promise, even for code 0.
+      // Otherwise the QueryMutex is permanently locked for this user/agent.
+      let settled = false;
+      const safeResolve = (msg: IpcResultMessage) => {
+        if (!settled) {
+          settled = true;
+          resolveResult(msg);
+        }
+      };
+      const safeReject = (err: Error) => {
+        if (!settled) {
+          settled = true;
+          rejectResult(err);
+        }
+      };
+
+      const workerExitHandler = (code: number | null, signal: string | null) => {
+        safeReject(new Error(`Worker exited: code=${code} signal=${signal}`));
+      };
+
+      // Spawn worker if needed, otherwise update handler and send message directly
+      if (!workerManager.has(workerKey)) {
+        workerManager.spawn(
+          workerKey,
+          conversation.agentId,
+          user.name,
+          JSON.stringify(config),
+          user.toolsDeny,
+          workerMessageHandler,
+          workerExitHandler,
+        );
+        // Worker will send "ready" → handler sends the "message" IPC
+      } else {
+        // Worker already alive from a previous message — update handler and send directly
+        workerManager.updateHandler(workerKey, workerMessageHandler);
+        workerManager.updateExitHandler(workerKey, workerExitHandler);
+        workerManager.sendToWorker(workerKey, {
+          type: "message",
+          content: msg.content,
+          resumeSessionId: conversation.sdkSessionConfirmed ? (conversation.sessionId ?? undefined) : undefined,
+        });
+      }
     });
-  };
 
-  const onToolResult = (toolId: string, _toolName: string, output: string) => {
+    // === Post-processing: persistence, cost tracking, result frame ===
+
+    if (result.responseContent) {
+      const frame: WsAssistantMessage = {
+        type: "assistant_message",
+        id: conversation.messageBuffer.nextId(),
+        content: result.responseContent,
+        usage: {
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+          cacheReadTokens: result.usage.cacheReadTokens,
+          cacheCreationTokens: result.usage.cacheCreationTokens,
+        },
+      };
+      conversation.messageBuffer.push(frame);
+      ws.send(JSON.stringify(frame));
+
+      // Persist assistant message
+      if (conversation.sessionId) {
+        const sessionDirs = sessionDirsForUser(agentContext, user);
+        const assistantMsg: PersistedMessage = {
+          role: "assistant",
+          content: result.responseContent,
+          timestamp: new Date().toISOString(),
+          ...(result.toolCalls.length > 0 ? { toolCalls: result.toolCalls } : {}),
+        };
+        await appendMessage(sessionDirs, conversation.sessionId, assistantMsg);
+      }
+    }
+
+    // Record usage
+    if (conversation.sessionId) {
+      usageTracker.recordTurn(conversation.sessionId, conversation.agentId, user.name, result.usage);
+      costTracker.recordUsage(user.name, conversation.sessionId, result.usage.inputTokens, result.usage.outputTokens);
+      const postBudget = costTracker.checkBudget(user.name, conversation.sessionId);
+      if (postBudget.warnings.length > 0) {
+        ws.send(JSON.stringify({ type: "budget_warning", warnings: postBudget.warnings }));
+      }
+      if (!postBudget.allowed && postBudget.exceeded) {
+        ws.send(
+          JSON.stringify({
+            type: "budget_exceeded",
+            reason: postBudget.exceeded.budget,
+            limit: postBudget.exceeded.limit,
+            used: postBudget.exceeded.used,
+            resetsAt: postBudget.exceeded.resetsAt,
+          }),
+        );
+      }
+    }
+
+    // Final result frame
     ws.send(
       JSON.stringify({
-        type: "tool_result",
-        id: conversation.messageBuffer.nextId(),
-        toolId,
-        content: output,
+        type: "result",
+        sessionId: conversation.sessionId,
+        interrupted: result.interrupted,
+        usage: {
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+        },
       }),
     );
-  };
 
-  // Enforce remote sandbox policy — unconditional for serve mode
-  const sandboxPolicy: RemoteSandboxPolicy = {
-    ...REMOTE_SANDBOX_DEFAULTS,
-    // Enable shell only if agent manifest allows it AND sandbox is enforced
-    shell: !!(manifest.frontmatter.sandbox?.enforce && toolFilter?.allow?.includes("shell")),
-  };
+    ws.send(
+      JSON.stringify({
+        type: "status",
+        status: result.interrupted ? "interrupted" : "idle",
+      }),
+    );
 
-  let options = buildOptions(
-    agentContext,
-    {
-      resume: resumeId,
-      systemPrompt,
-      cwd,
-      agentEnv,
-      credentialsConfig: manifest.frontmatter.credentials ?? undefined,
-      allowedDomains: manifest.frontmatter.sandbox?.allowedDomains,
-      toolFilter,
-      toolOperations: manifest.frontmatter.toolOperations ?? undefined,
-      userToolsDeny: user.toolsDeny,
-      onToolApproval,
-      onToolResult,
-      sandboxPolicy,
-      mcpConfigs: manifest.frontmatter.mcp,
-      isRemoteSession: true,
-    },
-    config,
-  );
-
-  let responseBuffer = "";
-  let wasInterrupted = false;
-  const accumulatedUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
-  const toolCallNames: { name: string; status: string }[] = [];
-  let userMessagePersisted = false;
-
-  // Helper: persist the user message once we have a confirmed session ID
-  const persistUserMessage = async () => {
-    if (userMessagePersisted || !conversation.sessionId) return;
-    userMessagePersisted = true;
-    const sessionDirs = sessionDirsForUser(agentContext, user);
-    const userMsg: PersistedMessage = {
-      role: "user",
-      content: msg.content,
-      timestamp: new Date().toISOString(),
-    };
-    await appendMessage(sessionDirs, conversation.sessionId, userMsg);
-  };
-
-  let q: ReturnType<typeof sendMessage>;
-  try {
-    q = sendMessage(msg.content, options);
-    // Peek at the first message to detect session-not-found errors early
-    // (the SDK throws synchronously or on first iteration)
-  } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    if (resumeId && errMsg.includes("No conversation found")) {
-      // Retry without resume — treat as new conversation
-      resumeId = undefined;
-      userMessagePersisted = false;
-      options = buildOptions(
-        agentContext,
-        {
-          systemPrompt,
-          cwd,
-          agentEnv,
-          credentialsConfig: manifest.frontmatter.credentials ?? undefined,
-          allowedDomains: manifest.frontmatter.sandbox?.allowedDomains,
-          toolFilter,
-          toolOperations: manifest.frontmatter.toolOperations ?? undefined,
-          userToolsDeny: user.toolsDeny,
-          onToolApproval,
-          onToolResult,
-          sandboxPolicy,
-          mcpConfigs: manifest.frontmatter.mcp,
-          isRemoteSession: true,
-        },
-        config,
-      );
-      q = sendMessage(msg.content, options);
-    } else {
-      throw err;
-    }
-  }
-  conversation.activeQuery = q;
-
-  // If resuming an existing session, persist user message immediately
-  if (conversation.sdkSessionConfirmed && conversation.sessionId) {
-    await persistUserMessage();
-  }
-
-  try {
-    for await (const sdkMsg of q) {
-      // Capture session ID from init
-      if (sdkMsg.type === "system" && (sdkMsg as any).subtype === "init" && sdkMsg.session_id) {
-        const oldSessionId = conversation.sessionId;
-        conversation.sessionId = sdkMsg.session_id;
-        conversation.sdkSessionConfirmed = true;
-        // Delete orphaned buffer entry if the session ID changed (e.g. pre-created REST session → real SDK session)
-        if (oldSessionId && oldSessionId !== sdkMsg.session_id) {
-          const oldKey = bufferKey(conversation.agentId, oldSessionId, user.name);
-          conversationBuffers.delete(oldKey);
-        }
-        // Register the buffer under the real session ID
-        const key = bufferKey(conversation.agentId, sdkMsg.session_id, user.name);
-        if (!conversationBuffers.has(key)) {
-          conversationBuffers.set(key, { buffer: conversation.messageBuffer, lastActivity: Date.now() });
-        }
-        // If this is a new session, save metadata
-        const sessionDirs = sessionDirsForUser(agentContext, user);
-        const meta = createSessionMeta(sdkMsg.session_id, msg.content);
-        await saveSession(sessionDirs, meta);
-        await persistUserMessage();
-      }
-
-      // Stream events → WS frames
-      if (sdkMsg.type === "stream_event") {
-        const event = (sdkMsg as any).event;
-
-        // Text tokens
-        if (event?.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
-          responseBuffer += event.delta.text;
-          const frame: WsToken = {
-            type: "token",
-            id: conversation.messageBuffer.nextId(),
-            text: event.delta.text,
-          };
-          conversation.messageBuffer.push(frame);
-          ws.send(JSON.stringify(frame));
-        }
-
-        // Thinking tokens
-        if (event?.type === "content_block_delta" && event.delta?.type === "thinking_delta" && event.delta.thinking) {
-          ws.send(JSON.stringify({ type: "thinking_token", text: event.delta.thinking }));
-        }
-
-        // Tool use start
-        if (event?.type === "content_block_start" && event.content_block?.type === "tool_use") {
-          const toolName = (event.content_block.name ?? "unknown").replace(/^mcp__.+?__/, "");
-          const frame: WsToolUseStart = {
-            type: "tool_use_start",
-            id: conversation.messageBuffer.nextId(),
-            toolName,
-            toolId: event.content_block.id,
-          };
-          conversation.messageBuffer.push(frame);
-          ws.send(JSON.stringify(frame));
-          ws.send(JSON.stringify({ type: "status", status: "tool_use" }));
-          toolCallNames.push({ name: toolName, status: "complete" });
-        }
-
-        // Tool input streaming
-        if (event?.type === "content_block_delta" && event.delta?.type === "input_json_delta") {
-          ws.send(
-            JSON.stringify({
-              type: "tool_use_input",
-              toolId: event.content_block?.id ?? "",
-              partialJson: event.delta.partial_json,
-            }),
-          );
-        }
-
-        // Tool use end (content_block_stop doesn't carry content_block in all SDK versions)
-        if (event?.type === "content_block_stop") {
-          // Tool end is best-effort — the frontend uses tool_use_start as the anchor
-        }
-      }
-
-      // Sub-agent events
-      if (sdkMsg.type === "system" && (sdkMsg as any).subtype === "task_started") {
-        const m = sdkMsg as any;
-        ws.send(
-          JSON.stringify({
-            type: "subagent_started",
-            taskId: m.task_id,
-            description: m.description ?? "",
-          }),
-        );
-      }
-
-      if (sdkMsg.type === "system" && (sdkMsg as any).subtype === "task_progress") {
-        const m = sdkMsg as any;
-        ws.send(
-          JSON.stringify({
-            type: "subagent_progress",
-            taskId: m.task_id,
-            toolUses: m.usage?.tool_uses ?? 0,
-            durationMs: m.usage?.duration_ms ?? 0,
-            totalTokens: m.usage?.total_tokens ?? 0,
-          }),
-        );
-      }
-
-      if (sdkMsg.type === "system" && (sdkMsg as any).subtype === "task_notification") {
-        const m = sdkMsg as any;
-        ws.send(
-          JSON.stringify({
-            type: "subagent_done",
-            taskId: m.task_id,
-            status: m.status,
-            summary: m.summary ?? "",
-            totalTokens: m.usage?.total_tokens ?? 0,
-          }),
-        );
-      }
-
-      // Assistant turn complete — accumulate usage but DON'T send assistant_message yet.
-      // In multi-turn tool use, there are multiple `assistant` events (one per API call).
-      // We send ONE assistant_message after the loop ends (with the full accumulated content).
-      if (sdkMsg.type === "assistant") {
-        const usage = (sdkMsg as any).message?.usage;
-        if (usage) {
-          accumulatedUsage.inputTokens += usage.input_tokens ?? 0;
-          accumulatedUsage.outputTokens += usage.output_tokens ?? 0;
-          accumulatedUsage.cacheReadTokens += usage.cache_read_input_tokens ?? 0;
-          accumulatedUsage.cacheCreationTokens += usage.cache_creation_input_tokens ?? 0;
-        }
-        // Extract text from the message content as fallback (if streaming didn't capture it)
-        if (!responseBuffer) {
-          const text = (sdkMsg as any).message?.content
-            ?.filter((block: any) => block.type === "text")
-            .map((block: any) => block.text)
-            .join("");
-          if (text) responseBuffer = text;
-        }
-      }
-
-      // Result (end of turn)
-      if (sdkMsg.type === "result") {
-        wasInterrupted = !!(sdkMsg as any).is_interrupted;
-      }
+    // Touch session
+    if (conversation.sessionId) {
+      const sessionDirs = sessionDirsForUser(agentContext, user);
+      await touchSession(sessionDirs, conversation.sessionId);
     }
   } catch (err) {
-    // Ensure user message is persisted even on error, if we have a session
-    if (!userMessagePersisted && conversation.sessionId) {
+    // Best-effort persist user message on error
+    if (conversation.sessionId) {
       try {
-        await persistUserMessage();
-      } catch (persistErr) {
-        console.error("[serve] Failed to persist user message on error path:", persistErr);
+        const sessionDirs = sessionDirsForUser(agentContext, user);
+        await appendMessage(sessionDirs, conversation.sessionId, {
+          role: "user",
+          content: msg.content,
+          timestamp: new Date().toISOString(),
+        });
+      } catch {
+        // Best effort
       }
-    }
-    if (!userMessagePersisted) {
-      console.warn("[serve] User message was not persisted — no session ID was confirmed before error");
     }
     const classified = classifyError(err);
     ws.send(
@@ -807,86 +791,8 @@ async function handleMessage(
         message: classified.message,
       }),
     );
-  }
-
-  conversation.activeQuery = null;
-
-  // Send ONE assistant_message with the final accumulated content (after all tool-use turns)
-  if (responseBuffer) {
-    const frame: WsAssistantMessage = {
-      type: "assistant_message",
-      id: conversation.messageBuffer.nextId(),
-      content: responseBuffer,
-      usage: {
-        inputTokens: accumulatedUsage.inputTokens,
-        outputTokens: accumulatedUsage.outputTokens,
-        cacheReadTokens: accumulatedUsage.cacheReadTokens,
-        cacheCreationTokens: accumulatedUsage.cacheCreationTokens,
-      },
-    };
-    conversation.messageBuffer.push(frame);
-    ws.send(JSON.stringify(frame));
-
-    // Persist assistant message to disk
-    if (conversation.sessionId) {
-      const sessionDirs = sessionDirsForUser(agentContext, user);
-      const assistantMsg: PersistedMessage = {
-        role: "assistant",
-        content: responseBuffer,
-        timestamp: new Date().toISOString(),
-        ...(toolCallNames.length > 0 ? { toolCalls: toolCallNames } : {}),
-      };
-      await appendMessage(sessionDirs, conversation.sessionId, assistantMsg);
-    }
-  }
-
-  // Record usage
-  if (conversation.sessionId) {
-    usageTracker.recordTurn(conversation.sessionId, conversation.agentId, user.name, accumulatedUsage);
-
-    // Record cost and check budget
-    costTracker.recordUsage(
-      user.name,
-      conversation.sessionId,
-      accumulatedUsage.inputTokens,
-      accumulatedUsage.outputTokens,
-    );
-    const postBudget = costTracker.checkBudget(user.name, conversation.sessionId);
-    if (postBudget.warnings.length > 0) {
-      ws.send(JSON.stringify({ type: "budget_warning", warnings: postBudget.warnings }));
-    }
-    if (!postBudget.allowed && postBudget.exceeded) {
-      ws.send(
-        JSON.stringify({
-          type: "budget_exceeded",
-          reason: postBudget.exceeded.budget,
-          limit: postBudget.exceeded.limit,
-          used: postBudget.exceeded.used,
-          resetsAt: postBudget.exceeded.resetsAt,
-        }),
-      );
-    }
-  }
-
-  // Final result frame
-  ws.send(
-    JSON.stringify({
-      type: "result",
-      sessionId: conversation.sessionId,
-      interrupted: wasInterrupted,
-      usage: {
-        inputTokens: accumulatedUsage.inputTokens,
-        outputTokens: accumulatedUsage.outputTokens,
-      },
-    }),
-  );
-
-  ws.send(JSON.stringify({ type: "status", status: wasInterrupted ? "interrupted" : "idle" }));
-
-  // Touch session
-  if (conversation.sessionId) {
-    const sessionDirs = sessionDirsForUser(agentContext, user);
-    await touchSession(sessionDirs, conversation.sessionId);
+  } finally {
+    release();
   }
 }
 
@@ -897,6 +803,8 @@ function registerWebSocketRoute(
   logger: Logger,
   rateLimiter: RateLimiter,
   costTracker: CostTracker,
+  workerManager: WorkerManager,
+  queryMutex: QueryMutex,
 ) {
   app.register(async (fastify) => {
     fastify.get("/ws", { websocket: true }, (socket, request) => {
@@ -1002,6 +910,10 @@ function registerWebSocketRoute(
           switch (msg.type) {
             case "subscribe": {
               const prev = activeConversation;
+              // F1 fix: Kill previous worker before re-subscribing
+              if (prev) {
+                workerManager.kill(prev.workerKey);
+              }
               activeConversation = await handleSubscribe(ws, msg, user, opts.config);
               if (activeConversation && !prev) {
                 activeSessionCount++;
@@ -1051,7 +963,17 @@ function registerWebSocketRoute(
                 );
                 return;
               }
-              await handleMessage(ws, msg, activeConversation, opts.config, usageTracker, costTracker);
+              await handleMessage(
+                ws,
+                msg,
+                activeConversation,
+                opts.config,
+                usageTracker,
+                costTracker,
+                workerManager,
+                queryMutex,
+                logger,
+              );
               break;
             }
             case "ping":
@@ -1072,9 +994,8 @@ function registerWebSocketRoute(
               break;
             }
             case "interrupt":
-              if (activeConversation?.activeQuery) {
-                activeConversation.activeQuery.interrupt();
-                ws.send(JSON.stringify({ type: "status", status: "interrupted" }));
+              if (activeConversation) {
+                workerManager.sendToWorker(activeConversation.workerKey, { type: "interrupt" });
               }
               break;
           }
@@ -1100,11 +1021,10 @@ function registerWebSocketRoute(
         connectedClients.delete(ws);
         if (activeConversation) {
           activeSessionCount--;
+          // W5-T03: Kill the session worker when the WebSocket disconnects
+          workerManager.kill(activeConversation.workerKey);
         }
         rateLimiter.removeConnection(user.name);
-        if (activeConversation?.activeQuery) {
-          activeConversation.activeQuery = null;
-        }
       });
     });
   });
@@ -1166,9 +1086,9 @@ export async function startServer(opts: ServeOptions): Promise<void> {
     max: 100,
     timeWindow: "1 minute",
     keyGenerator: (request) => {
-      // Use auth token or IP as the rate limit key
+      // F5: Hash the token before using as rate limit key — never store raw tokens in memory
       const authHeader = request.headers.authorization;
-      if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
+      if (authHeader?.startsWith("Bearer ")) return hashToken(authHeader.slice(7));
       return request.ip ?? "unknown";
     },
     allowList: (request) => {
@@ -1201,7 +1121,11 @@ export async function startServer(opts: ServeOptions): Promise<void> {
   registerUsageRoutes(app, opts, usageTracker, costTracker);
   registerAdminRoutes(app, opts, costTracker, logger);
   registerPrivacyRoutes(app, opts, logger);
-  registerWebSocketRoute(app, opts, usageTracker, logger, rateLimiter, costTracker);
+  // W5-T02/T03: Worker manager for process-isolated sessions
+  const workerManager = new WorkerManager(logger);
+  const queryMutex = new QueryMutex();
+
+  registerWebSocketRoute(app, opts, usageTracker, logger, rateLimiter, costTracker, workerManager, queryMutex);
 
   // ─── File watcher for hot reload ───
 
@@ -1218,8 +1142,15 @@ export async function startServer(opts: ServeOptions): Promise<void> {
       onRosterChange: async () => {
         try {
           const allAgents = await listAgents();
-          const rosterPayload = allAgents.map(agentToApiResponse);
-          broadcastToAll({ type: "roster_updated", agents: rosterPayload });
+          // F7: Filter roster per user's access — don't leak agent info to unauthorized users
+          for (const [ws, clientInfo] of connectedClients) {
+            const filtered = filterAgentsForUser(allAgents, clientInfo.user);
+            try {
+              ws.send(JSON.stringify({ type: "roster_updated", agents: filtered.map(agentToApiResponse) }));
+            } catch {
+              // Connection already closed
+            }
+          }
           logger.info("agent", "roster.reloaded", `Roster reloaded: ${allAgents.length} agents`);
         } catch (err) {
           logger.error("agent", "roster.reload_failed", `Failed to reload roster: ${err}`);
@@ -1280,7 +1211,15 @@ export async function startServer(opts: ServeOptions): Promise<void> {
         costTracker.setBudget(entry.name, entry.budget);
       }
       const allAgents = await listAgents();
-      broadcastToAll({ type: "roster_updated", agents: allAgents.map(agentToApiResponse) });
+      // F7: Filter roster per user on broadcast
+      for (const [ws, clientInfo] of connectedClients) {
+        const filtered = filterAgentsForUser(allAgents, clientInfo.user);
+        try {
+          ws.send(JSON.stringify({ type: "roster_updated", agents: filtered.map(agentToApiResponse) }));
+        } catch {
+          // Connection already closed
+        }
+      }
       logger.info("server", "admin.reload", "Manual reload completed");
       return { reloaded: true, agents: allAgents.length };
     } catch (err) {
@@ -1349,6 +1288,9 @@ export async function startServer(opts: ServeOptions): Promise<void> {
         );
       }
     }
+
+    // W5-T02: Kill all session workers before closing connections
+    workerManager.killAll();
 
     // Close all remaining WebSocket connections
     for (const [ws] of connectedClients) {

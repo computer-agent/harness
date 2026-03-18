@@ -2,12 +2,13 @@
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "ignoreExportsUsedInFile": true,
   "exclude": ["types", "enumMembers"],
-  "ignoreBinaries": ["vitest"],
+  "ignoreBinaries": ["vitest", "biome", "tsc", "tsx", "lefthook"],
   "workspaces": {
     ".": {
-      "entry": ["src/serve.ts", "src/a2a/index.ts"],
+      "entry": ["src/index.tsx", "src/serve.ts", "src/a2a/index.ts", "src/session-worker.ts", "bin/mastersof-ai.js"],
       "project": ["src/**/*.{ts,tsx}"],
-      "ignoreBinaries": ["knip"]
+      "ignoreBinaries": ["knip"],
+      "ignoreDependencies": ["tsx", "@biomejs/biome", "lefthook"]
     },
     "web": {
       "project": ["src/**/*.{ts,tsx}"],

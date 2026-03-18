@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
@@ -148,4 +148,15 @@ export function userCanAccessAgent(agent: AgentManifest, user: AccessUser): bool
 
 export function filterAgentsForUser(agents: AgentManifest[], user: AccessUser): AgentManifest[] {
   return agents.filter((a) => userCanAccessAgent(a, user));
+}
+
+/**
+ * Generate a cryptographically random access token and its SHA-256 hash.
+ *
+ * Returns the raw token (to give to the partner) and the hash (to store in access.yaml).
+ * The raw token is 32 bytes of randomness, hex-encoded (64 chars).
+ */
+export function generateAccessToken(): { token: string; tokenHash: string } {
+  const token = randomBytes(32).toString("hex");
+  return { token, tokenHash: hashToken(token) };
 }

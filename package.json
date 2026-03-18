@@ -39,14 +39,15 @@
   "scripts": {
     "start": "tsx src/index.tsx",
     "dev": "tsx watch src/index.tsx",
-    "test": "tsx --test src/manifest.test.ts src/agent-context.test.ts src/path-safety.test.ts src/tools/index.test.ts src/prompt.test.ts src/types/ask-user.test.ts src/env-safety.test.ts src/url-safety.test.ts src/credentials.test.ts src/egress-proxy.test.ts src/content-safety.test.ts src/integration.test.ts",
-    "test:unit": "tsx --test src/manifest.test.ts src/agent-context.test.ts src/path-safety.test.ts src/tools/index.test.ts src/prompt.test.ts src/types/ask-user.test.ts src/env-safety.test.ts src/url-safety.test.ts src/credentials.test.ts src/egress-proxy.test.ts src/content-safety.test.ts",
+    "test": "tsx --test src/manifest.test.ts src/agent-context.test.ts src/path-safety.test.ts src/tools/index.test.ts src/prompt.test.ts src/types/ask-user.test.ts src/env-safety.test.ts src/url-safety.test.ts src/credentials.test.ts src/egress-proxy.test.ts src/content-safety.test.ts src/session-worker.test.ts src/integration.test.ts",
+    "test:unit": "tsx --test src/manifest.test.ts src/agent-context.test.ts src/path-safety.test.ts src/tools/index.test.ts src/prompt.test.ts src/types/ask-user.test.ts src/env-safety.test.ts src/url-safety.test.ts src/credentials.test.ts src/egress-proxy.test.ts src/content-safety.test.ts src/session-worker.test.ts",
     "test:integration": "tsx --test src/integration.test.ts",
     "lint": "biome check",
     "lint:fix": "biome check --write",
     "typecheck": "tsc --noEmit",
     "check": "biome check && tsc --noEmit",
-    "knip": "npx knip",
+    "knip": "npx knip --workspace .",
+    "knip:all": "npx knip",
     "check:all": "biome check && tsc --noEmit && cd web && tsc -b && cd .. && npx knip"
   },
   "dependencies": {
