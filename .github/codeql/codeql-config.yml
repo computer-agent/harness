@@ -1,0 +1,9 @@
+name: "CodeQL config for mastersof-ai/harness"
+
+# Exclude queries that produce false positives for Fastify's architecture.
+# Fastify uses plugin-based global rate limiting (@fastify/rate-limit),
+# not per-route middleware. CodeQL's js/missing-rate-limiting rule is
+# Express-centric and doesn't recognize this pattern.
+query-filters:
+  - exclude:
+      id: js/missing-rate-limiting

@@ -1,6 +1,5 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { validateSessionId } from "./path-safety.js";
+import { safePath, validateSessionId } from "./path-safety.js";
 import type { SessionDirs } from "./sessions.js";
 
 export interface PersistedMessage {
@@ -12,12 +11,12 @@ export interface PersistedMessage {
 
 function messagesPath(dirs: SessionDirs, sessionId: string): string {
   validateSessionId(sessionId);
-  return join(dirs.sessionsDir, sessionId, "messages.jsonl");
+  return safePath(dirs.sessionsDir, sessionId, "messages.jsonl");
 }
 
 export async function appendMessage(dirs: SessionDirs, sessionId: string, message: PersistedMessage): Promise<void> {
   const filePath = messagesPath(dirs, sessionId);
-  await mkdir(join(dirs.sessionsDir, sessionId), { recursive: true });
+  await mkdir(safePath(dirs.sessionsDir, sessionId), { recursive: true });
   await appendFile(filePath, `${JSON.stringify(message)}\n`, "utf-8");
 }
 

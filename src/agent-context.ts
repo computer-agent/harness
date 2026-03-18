@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { getHomeDir } from "./config.js";
 import { type AgentManifest, loadAgentManifest } from "./manifest.js";
-import { validateName } from "./path-safety.js";
+import { safePath, validateName } from "./path-safety.js";
 
 export interface AgentContext {
   name: string;
@@ -36,7 +36,8 @@ export function getAgentsDir(): string {
 
 export function resolveAgent(name: string): AgentContext {
   validateName(name, "agent name");
-  const agentDir = join(getAgentsDir(), name);
+  const agentsDir = getAgentsDir();
+  const agentDir = safePath(agentsDir, name);
   const identityPath = join(agentDir, "IDENTITY.md");
 
   if (!existsSync(agentDir)) {
@@ -46,7 +47,7 @@ export function resolveAgent(name: string): AgentContext {
     throw new AgentNotFoundError(name, `IDENTITY.md not found: ${identityPath}`);
   }
 
-  const stateDir = join(getHomeDir(), "state", name);
+  const stateDir = safePath(getHomeDir(), "state", name);
   const workspaceDir = join(agentDir, "workspace");
   mkdirSync(workspaceDir, { recursive: true });
 
@@ -77,7 +78,8 @@ export function resolveRemoteAgent(name: string, userId: string): AgentContext {
   validateName(name, "agent name");
   validateName(userId, "user ID");
 
-  const agentDir = join(getAgentsDir(), name);
+  const agentsDir = getAgentsDir();
+  const agentDir = safePath(agentsDir, name);
   const identityPath = join(agentDir, "IDENTITY.md");
 
   if (!existsSync(agentDir)) {
@@ -87,9 +89,9 @@ export function resolveRemoteAgent(name: string, userId: string): AgentContext {
     throw new AgentNotFoundError(name, `IDENTITY.md not found: ${identityPath}`);
   }
 
-  const stateDir = join(getHomeDir(), "state", name);
-  const userWorkspaceDir = join(agentDir, "workspace", userId);
-  const userMemoryDir = join(agentDir, "memory", userId);
+  const stateDir = safePath(getHomeDir(), "state", name);
+  const userWorkspaceDir = safePath(agentDir, "workspace", userId);
+  const userMemoryDir = safePath(agentDir, "memory", userId);
 
   mkdirSync(userWorkspaceDir, { recursive: true, mode: 0o700 });
   mkdirSync(userMemoryDir, { recursive: true, mode: 0o700 });
@@ -123,8 +125,8 @@ export async function listAgents(): Promise<AgentManifest[]> {
   }
 
   const agentDirs = entries
-    .filter((e) => e.isDirectory() && existsSync(join(agentsDir, e.name, "IDENTITY.md")))
-    .map((e) => join(agentsDir, e.name));
+    .filter((e) => e.isDirectory() && existsSync(safePath(agentsDir, e.name, "IDENTITY.md")))
+    .map((e) => safePath(agentsDir, e.name));
 
   const results = await Promise.all(
     agentDirs.map(async (dir) => {

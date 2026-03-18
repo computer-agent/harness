@@ -1,6 +1,5 @@
 import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { validateSessionId } from "./path-safety.js";
+import { safePath, validateSessionId } from "./path-safety.js";
 
 export interface SessionDirs {
   sessionsDir: string;
@@ -19,14 +18,14 @@ export interface SessionMeta {
 export async function saveSession(dirs: SessionDirs, meta: SessionMeta): Promise<void> {
   validateSessionId(meta.id);
   await mkdir(dirs.sessionsDir, { recursive: true });
-  await writeFile(join(dirs.sessionsDir, `${meta.id}.json`), JSON.stringify(meta, null, 2), "utf-8");
+  await writeFile(safePath(dirs.sessionsDir, `${meta.id}.json`), JSON.stringify(meta, null, 2), "utf-8");
   await writeFile(dirs.lastSessionFile, meta.id, "utf-8");
 }
 
 export async function loadSession(dirs: SessionDirs, id: string): Promise<SessionMeta | null> {
   try {
     validateSessionId(id);
-    const raw = await readFile(join(dirs.sessionsDir, `${id}.json`), "utf-8");
+    const raw = await readFile(safePath(dirs.sessionsDir, `${id}.json`), "utf-8");
     return JSON.parse(raw);
   } catch {
     return null;
@@ -40,7 +39,7 @@ export async function listSessions(dirs: SessionDirs): Promise<SessionMeta[]> {
     for (const f of files) {
       if (!f.endsWith(".json")) continue;
       try {
-        const raw = await readFile(join(dirs.sessionsDir, f), "utf-8");
+        const raw = await readFile(safePath(dirs.sessionsDir, f), "utf-8");
         sessions.push(JSON.parse(raw));
       } catch {
         // skip corrupt files
@@ -56,7 +55,7 @@ export async function listSessions(dirs: SessionDirs): Promise<SessionMeta[]> {
 export async function deleteSession(dirs: SessionDirs, id: string): Promise<boolean> {
   try {
     validateSessionId(id);
-    await unlink(join(dirs.sessionsDir, `${id}.json`));
+    await unlink(safePath(dirs.sessionsDir, `${id}.json`));
     return true;
   } catch {
     return false;
@@ -67,7 +66,7 @@ export async function touchSession(dirs: SessionDirs, id: string): Promise<void>
   const meta = await loadSession(dirs, id);
   if (!meta) return;
   meta.lastUsedAt = new Date().toISOString();
-  await writeFile(join(dirs.sessionsDir, `${meta.id}.json`), JSON.stringify(meta, null, 2), "utf-8");
+  await writeFile(safePath(dirs.sessionsDir, `${meta.id}.json`), JSON.stringify(meta, null, 2), "utf-8");
   await writeFile(dirs.lastSessionFile, id, "utf-8");
 }
 
@@ -75,7 +74,7 @@ export async function renameSession(dirs: SessionDirs, id: string, name: string)
   const meta = await loadSession(dirs, id);
   if (!meta) return;
   meta.name = name;
-  await writeFile(join(dirs.sessionsDir, `${meta.id}.json`), JSON.stringify(meta, null, 2), "utf-8");
+  await writeFile(safePath(dirs.sessionsDir, `${meta.id}.json`), JSON.stringify(meta, null, 2), "utf-8");
 }
 
 export async function getLastSessionId(dirs: SessionDirs): Promise<string | null> {

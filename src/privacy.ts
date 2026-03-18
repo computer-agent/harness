@@ -5,7 +5,7 @@ import { pipeline } from "node:stream/promises";
 import archiver from "archiver";
 import { getHomeDir } from "./config.js";
 import type { Logger } from "./logger.js";
-import { validateName, validatePathSegment } from "./path-safety.js";
+import { safePath, validateName, validatePathSegment } from "./path-safety.js";
 
 export interface PrivacyConfig {
   sessionRetentionDays: number;
@@ -49,7 +49,7 @@ interface CleanupReport {
 
 export async function checkConsent(userId: string, policyVersion: string): Promise<boolean> {
   validateName(userId, "user ID");
-  const consentPath = join(getHomeDir(), "state", "consent", `${userId}.json`);
+  const consentPath = safePath(getHomeDir(), "state", "consent", `${userId}.json`);
   try {
     const raw = await readFile(consentPath, "utf-8");
     const record: ConsentRecord = JSON.parse(raw);
@@ -61,14 +61,14 @@ export async function checkConsent(userId: string, policyVersion: string): Promi
 
 export async function recordConsent(userId: string, policyVersion: string): Promise<void> {
   validateName(userId, "user ID");
-  const consentDir = join(getHomeDir(), "state", "consent");
+  const consentDir = safePath(getHomeDir(), "state", "consent");
   await mkdir(consentDir, { recursive: true });
   const record: ConsentRecord = {
     userId,
     policyVersion,
     grantedAt: new Date().toISOString(),
   };
-  await writeFile(join(consentDir, `${userId}.json`), JSON.stringify(record, null, 2));
+  await writeFile(safePath(consentDir, `${userId}.json`), JSON.stringify(record, null, 2));
 }
 
 // ─── Data Export ───
@@ -109,15 +109,15 @@ export async function exportUserData(userId: string): Promise<Buffer> {
     for (const agentId of agents) {
       validatePathSegment(agentId, "agent directory name");
       // Sessions
-      const sessionsDir = join(homeDir, "state", agentId, "sessions", userId);
+      const sessionsDir = safePath(homeDir, "state", agentId, "sessions", userId);
       await addDirectoryToArchive(archive, sessionsDir, `export-${userId}/agents/${agentId}/sessions`);
 
       // Memory
-      const memoryDir = join(agentsDir, agentId, "memory", userId);
+      const memoryDir = safePath(agentsDir, agentId, "memory", userId);
       await addDirectoryToArchive(archive, memoryDir, `export-${userId}/agents/${agentId}/memory`);
 
       // Workspace
-      const workspaceDir = join(agentsDir, agentId, "workspace", userId);
+      const workspaceDir = safePath(agentsDir, agentId, "workspace", userId);
       await addDirectoryToArchive(archive, workspaceDir, `export-${userId}/agents/${agentId}/workspace`);
     }
   } catch {
@@ -125,7 +125,7 @@ export async function exportUserData(userId: string): Promise<Buffer> {
   }
 
   // Usage data
-  const usagePath = join(homeDir, "state", "usage", `${userId}.json`);
+  const usagePath = safePath(homeDir, "state", "usage", `${userId}.json`);
   try {
     const usageData = await readFile(usagePath, "utf-8");
     archive.append(usageData, { name: `export-${userId}/usage.json` });
@@ -134,7 +134,7 @@ export async function exportUserData(userId: string): Promise<Buffer> {
   }
 
   // Consent record
-  const consentPath = join(homeDir, "state", "consent", `${userId}.json`);
+  const consentPath = safePath(homeDir, "state", "consent", `${userId}.json`);
   try {
     const consentData = await readFile(consentPath, "utf-8");
     archive.append(consentData, { name: `export-${userId}/consent.json` });
@@ -152,7 +152,7 @@ async function addDirectoryToArchive(archive: archiver.Archiver, dirPath: string
   try {
     const files = await readdir(dirPath, { recursive: true });
     for (const file of files) {
-      const fullPath = join(dirPath, file.toString());
+      const fullPath = safePath(dirPath, file.toString());
       try {
         const s = await stat(fullPath);
         if (s.isFile()) {
@@ -187,16 +187,17 @@ export async function deleteUserData(userId: string): Promise<DeletionReport> {
   try {
     const agents = await readdir(agentsDir);
     for (const agentId of agents) {
+      validatePathSegment(agentId, "agent directory name");
       // Sessions
-      const sessionsDir = join(homeDir, "state", agentId, "sessions", userId);
+      const sessionsDir = safePath(homeDir, "state", agentId, "sessions", userId);
       report.deleted.sessions += await deleteDirectory(sessionsDir);
 
       // Memory
-      const memoryDir = join(agentsDir, agentId, "memory", userId);
+      const memoryDir = safePath(agentsDir, agentId, "memory", userId);
       report.deleted.memoryFiles += await deleteDirectory(memoryDir);
 
       // Workspace
-      const workspaceDir = join(agentsDir, agentId, "workspace", userId);
+      const workspaceDir = safePath(agentsDir, agentId, "workspace", userId);
       report.deleted.workspaceFiles += await deleteDirectory(workspaceDir);
     }
   } catch {
@@ -204,7 +205,7 @@ export async function deleteUserData(userId: string): Promise<DeletionReport> {
   }
 
   // Usage data
-  const usagePath = join(homeDir, "state", "usage", `${userId}.json`);
+  const usagePath = safePath(homeDir, "state", "usage", `${userId}.json`);
   try {
     await rm(usagePath);
     report.deleted.usageFile = true;
@@ -213,7 +214,7 @@ export async function deleteUserData(userId: string): Promise<DeletionReport> {
   }
 
   // Consent record
-  const consentPath = join(homeDir, "state", "consent", `${userId}.json`);
+  const consentPath = safePath(homeDir, "state", "consent", `${userId}.json`);
   try {
     await rm(consentPath);
     report.deleted.consentFile = true;
@@ -252,7 +253,8 @@ export async function runRetentionCleanup(config: PrivacyConfig, logger?: Logger
     const agentDirs = await readdir(stateDir);
     for (const agentDir of agentDirs) {
       if (agentDir === "usage" || agentDir === "consent") continue;
-      const sessionsBase = join(stateDir, agentDir, "sessions");
+      validatePathSegment(agentDir, "agent directory name");
+      const sessionsBase = safePath(stateDir, agentDir, "sessions");
       report.sessionsDeleted += await cleanOldFiles(sessionsBase, sessionCutoff);
     }
   } catch {
@@ -264,7 +266,8 @@ export async function runRetentionCleanup(config: PrivacyConfig, logger?: Logger
   try {
     const agents = await readdir(agentsDir);
     for (const agentId of agents) {
-      const workspaceBase = join(agentsDir, agentId, "workspace");
+      validatePathSegment(agentId, "agent directory name");
+      const workspaceBase = safePath(agentsDir, agentId, "workspace");
       report.workspaceFilesDeleted += await cleanOldFiles(workspaceBase, workspaceCutoff);
     }
   } catch {
@@ -277,7 +280,7 @@ export async function runRetentionCleanup(config: PrivacyConfig, logger?: Logger
     const files = await readdir(usageDir);
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
-      const filePath = join(usageDir, file);
+      const filePath = safePath(usageDir, file);
       try {
         const s = await stat(filePath);
         if (s.mtimeMs < usageCutoff) {
@@ -306,7 +309,7 @@ async function cleanOldFiles(baseDir: string, cutoffMs: number): Promise<number>
   try {
     const userDirs = await readdir(baseDir);
     for (const userDir of userDirs) {
-      const userPath = join(baseDir, userDir);
+      const userPath = safePath(baseDir, userDir);
       try {
         const s = await stat(userPath);
         if (s.isDirectory() && s.mtimeMs < cutoffMs) {
