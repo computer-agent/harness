@@ -93,8 +93,12 @@ export function resolveRemoteAgent(name: string, userId: string): AgentContext {
   const userWorkspaceDir = safePath(agentDir, "workspace", userId);
   const userMemoryDir = safePath(agentDir, "memory", userId);
 
+  // W4-T08: Per-user log directory — isolates stderr output per remote user
+  const userLogDir = safePath(stateDir, "logs", userId);
+
   mkdirSync(userWorkspaceDir, { recursive: true, mode: 0o700 });
   mkdirSync(userMemoryDir, { recursive: true, mode: 0o700 });
+  mkdirSync(userLogDir, { recursive: true, mode: 0o700 });
 
   return {
     name,
@@ -106,7 +110,7 @@ export function resolveRemoteAgent(name: string, userId: string): AgentContext {
     sessionsDir: join(stateDir, "sessions"),
     lastSessionFile: join(stateDir, "last-session-id"),
     proposalsDir: join(stateDir, "proposals"),
-    stderrLog: join(stateDir, "stderr.log"),
+    stderrLog: join(userLogDir, "stderr.log"),
     workspaceDir: userWorkspaceDir,
   };
 }

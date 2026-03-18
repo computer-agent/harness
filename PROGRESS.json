@@ -1,156 +1,115 @@
 {
-  "wave": "Wave 2: Credential Architecture + Egress + Headless",
+  "wave": "Wave 4: Defense in Depth",
   "started": "2026-03-18",
   "updatedAt": "2026-03-18",
   "status": "complete",
   "items": [
     {
-      "id": "W2-T01",
-      "name": "CredentialStore class + frontmatter schema",
+      "id": "W4-T01",
+      "name": "Web fetch content boundaries (structural tags + system prompt)",
       "status": "completed",
-      "files": ["src/credentials.ts", "src/manifest.ts"],
+      "files": ["src/content-safety.ts", "src/tools/web.ts", "src/agent.ts"],
       "validation": [
-        "CredentialStore.resolveFlat(domain) returns only granted keys in strict mode ✓",
-        "Legacy mode (no credentials config) returns all keys ✓",
-        "CredentialGrant, CredentialsSchema, ToolOperationSchema added to manifest.ts ✓",
-        "allowedDomains added to SandboxSchema ✓"
+        "content-safety.ts exports wrapFetchedContent, wrapMemoryContext, UNTRUSTED_CONTENT_INSTRUCTION ✓",
+        "web_fetch output wrapped in <fetched_content source=\"...\"> tags ✓",
+        "System prompt includes UNTRUSTED_CONTENT_INSTRUCTION (content boundaries) ✓"
       ]
     },
     {
-      "id": "W2-T02",
-      "name": "Wire CredentialStore into createAgentServers",
+      "id": "W4-T02",
+      "name": "Extraction model default in serve mode",
       "status": "completed",
-      "files": ["src/tools/index.ts", "src/agent.ts"],
+      "files": ["src/tools/web.ts", "src/tools/index.ts"],
       "validation": [
-        "createAgentServers accepts CredentialStore instead of raw agentEnv ✓",
-        "Web tools receive store.resolveFlat('web') ✓",
-        "Shell tools receive store.toFlatEnv() (filtered by buildShellEnv) ✓",
-        "mergeExternalMcpServers uses credentialStore.toFlatEnv() for env resolution ✓"
+        "createWebTools accepts isRemoteSession param ✓",
+        "Remote sessions default to claude-haiku-4-5-20251001 for extraction ✓",
+        "isRemote derived from !!sandboxPolicy in createAgentServers ✓"
       ]
     },
     {
-      "id": "W2-T03",
-      "name": "Audit logging on credential resolution",
+      "id": "W4-T03",
+      "name": "Memory content tagging (CONTEXT.md as untrusted)",
       "status": "completed",
-      "files": ["src/credentials.ts"],
+      "files": ["src/agent.ts", "src/content-safety.ts"],
       "validation": [
-        "CredentialStore.resolveFlat logs domain, grants, and keys when logger provided ✓",
-        "Uses LogCategory 'tool' with event 'credentials.resolved' ✓"
+        "Memory context wrapped in <memory_context> tags via wrapMemoryContext() ✓",
+        "Label in system prompt: 'accumulated context from previous sessions' ✓"
       ]
     },
     {
-      "id": "W2-T04",
-      "name": "Egress proxy (domain allowlist filter)",
+      "id": "W4-T04",
+      "name": "DNS rebinding / redirect hardening + IPv6 + IP encoding",
       "status": "completed",
-      "files": ["src/egress-proxy.ts", "src/manifest.ts"],
+      "files": ["src/url-safety.ts", "src/tools/web.ts", "src/url-safety.test.ts"],
       "validation": [
-        "EgressFilter validates URLs against allowlist ✓",
-        "Supports exact match and wildcard (*.domain.com) patterns ✓",
-        "Throws on non-allowlisted domains ✓",
-        "Case-insensitive matching ✓"
+        "IPv4-mapped IPv6 dotted form (::ffff:127.0.0.1) normalized and blocked ✓",
+        "IPv4-mapped IPv6 hex-short form (::ffff:7f00:1) normalized and blocked ✓ [P0 review fix]",
+        "Decimal IP (2130706433) parsed via parseExoticIp and blocked ✓",
+        "Octal IP (0177.0.0.1) parsed via parseExoticIp and blocked ✓",
+        "Hex IP (0x7f000001) parsed via parseExoticIp and blocked ✓",
+        "Protocol validation rejects file://, data://, ftp:// ✓ [P1 review fix]",
+        "dns.lookup result null-checked ✓ [P1 review fix]",
+        "DNS pinning via URL rewrite removed (broke HTTPS TLS) — validate-then-fetch ✓ [P0 review fix]",
+        "safeFetch validates each redirect hop against SSRF blocklist + egress ✓",
+        "56 url-safety tests cover all bypass vectors incl. end-to-end IPv6 ✓"
       ]
     },
     {
-      "id": "W2-T05",
-      "name": "Wire egress proxy into web and A2A tools",
+      "id": "W4-T05",
+      "name": "A2A server authentication",
       "status": "completed",
-      "files": ["src/tools/web.ts", "src/tools/a2a.ts"],
+      "files": ["src/a2a/server.ts"],
       "validation": [
-        "web_fetch validates against egress filter before fetch ✓",
-        "web_search validates against egress filter before fetch ✓",
-        "A2A tools validate against egress filter (even for registered URLs) ✓",
-        "EgressFilter is optional — tools work without it ✓"
+        "JSON-RPC POST endpoint requires bearer token via bearerAuth middleware ✓",
+        "Agent card GET endpoint remains public (needed for discovery) ✓",
+        "Unauthenticated requests get 401 with 'Authentication required' ✓",
+        "Invalid tokens get 401 with 'Invalid token' ✓"
       ]
     },
     {
-      "id": "W2-T06",
-      "name": "Headless `run` subcommand",
+      "id": "W4-T06",
+      "name": "Deprecate WS query param token",
       "status": "completed",
-      "files": ["src/index.tsx"],
+      "files": ["src/serve.ts"],
       "validation": [
-        "mastersof-ai run <agent> 'message' subcommand implemented ✓",
-        "Structured exit codes (0=success, 1=error) ✓",
-        "Passes credentialsConfig, allowedDomains, toolOperations through ✓"
+        "extractWsToken returns { token, source } instead of bare string ✓",
+        "Query param token still works but logs deprecation via logger.warn ✓",
+        "Deprecation warning sent to client as { type: 'warning', code: 'token_query_deprecated' } ✓"
       ]
     },
     {
-      "id": "W2-T07",
-      "name": "runs.jsonl logging in run mode",
+      "id": "W4-T07",
+      "name": "Drop raw token from connectedClients",
       "status": "completed",
-      "files": ["src/index.tsx"],
+      "files": ["src/serve.ts"],
       "validation": [
-        "Appends JSON line to ~/.mastersof-ai/state/{agent}/runs.jsonl ✓",
-        "Record contains timestamp, agent, message, exitCode, durationMs ✓",
-        "Best-effort logging (failure doesn't block run) ✓"
+        "connectedClients Map type changed to { user, tokenHash } ✓",
+        "Raw token hashed via hashToken() before storage ✓",
+        "Token revocation uses hash comparison against access.yaml entries ✓",
+        "No raw token held in memory after auth ✓"
       ]
     },
     {
-      "id": "W2-T08",
-      "name": "Per-user tool deny in access.yaml",
+      "id": "W4-T08",
+      "name": "Per-user stderr logging",
       "status": "completed",
-      "files": ["src/access.ts", "src/agent.ts"],
+      "files": ["src/agent-context.ts"],
       "validation": [
-        "tools_deny field added to AccessEntry and AccessUser ✓",
-        "Parsed from access.yaml in loadAccessConfig ✓",
-        "canUseTool Layer 3 checks userToolsDeny ✓",
-        "Matches full tool name, suffix, or domain segment ✓"
+        "resolveRemoteAgent creates per-user log dir: state/{agent}/logs/{userId}/ ✓",
+        "stderrLog points to per-user path: logs/{userId}/stderr.log ✓",
+        "Log directory created with mode 0o700 ✓"
       ]
     },
     {
-      "id": "W2-T09",
-      "name": "canUseTool operation allowlist",
+      "id": "W4-T09",
+      "name": "Security model documentation",
       "status": "completed",
-      "files": ["src/manifest.ts", "src/agent.ts"],
+      "files": ["docs/security-model.md"],
       "validation": [
-        "toolOperations schema added to AgentFrontmatterSchema ✓",
-        "canUseTool Layer 4 checks operation against allow/deny lists ✓",
-        "Extracts operation from input.operation/method/action ✓",
-        "Passed through buildOptions from frontmatter ✓"
-      ]
-    },
-    {
-      "id": "W2-T10",
-      "name": "Restrict external MCP in serve mode",
-      "status": "completed",
-      "files": ["src/tools/index.ts"],
-      "validation": [
-        "Command-based MCP servers blocked in ALL serve mode sessions ✓",
-        "Previous check (only without sandbox) replaced with unconditional block ✓",
-        "URI-based MCP servers still allowed in serve mode ✓",
-        "sandboxPolicy param removed from mergeExternalMcpServers ✓"
-      ]
-    },
-    {
-      "id": "W2-T11",
-      "name": "credentials migrate CLI command",
-      "status": "completed",
-      "files": ["src/index.tsx"],
-      "validation": [
-        "mastersof-ai credentials migrate [agent] subcommand implemented ✓",
-        "Reads .env keys, outputs YAML credentials block ✓",
-        "Excludes DOTENV_PRIVATE_KEY ✓"
-      ]
-    },
-    {
-      "id": "W2-T12",
-      "name": "Docs for credentials and agent authoring",
-      "status": "completed",
-      "files": ["docs/credentials.md", "docs/agent-security.md"],
-      "validation": [
-        "docs/credentials.md: format reference with schema, examples, migration ✓",
-        "docs/agent-security.md: authoring guide covering all W2 features ✓"
-      ]
-    },
-    {
-      "id": "W2-T13",
-      "name": "Tests for CredentialStore + egress proxy",
-      "status": "completed",
-      "files": ["src/credentials.test.ts", "src/egress-proxy.test.ts", "package.json"],
-      "validation": [
-        "15 CredentialStore tests: legacy mode, strict mode, edge cases ✓",
-        "14 EgressFilter tests: exact match, wildcard, edge cases ✓",
-        "Test files added to package.json test scripts ✓",
-        "All 160 unit tests pass ✓"
+        "Covers all 8 security layers: env safety, URL safety, credentials, egress, content, tool ACL, auth, isolation ✓",
+        "Documents threat model (prompt injection, SSRF, credential leakage, lateral movement, DNS rebinding) ✓",
+        "Data flow diagram showing request path through security layers ✓",
+        "Links to related docs (agent-security, credentials, sandbox, configuration) ✓"
       ]
     }
   ]

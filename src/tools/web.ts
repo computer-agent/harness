@@ -5,6 +5,7 @@ import { Readability } from "@mozilla/readability";
 import { JSDOM, VirtualConsole } from "jsdom";
 import TurndownService from "turndown";
 import { z } from "zod";
+import { wrapFetchedContent } from "../content-safety.js";
 import type { EgressFilter } from "../egress-proxy.js";
 import { validateUrl } from "../url-safety.js";
 
@@ -56,31 +57,44 @@ async function extractRelevantContent(markdown: string, userQuery: string, model
  * against SSRF and egress filters. Prevents redirect-based bypass where
  * an allowlisted domain 3xx's to a forbidden one.
  */
+/**
+ * Redirect-safe fetch: follows redirects manually, validating each hop
+ * against SSRF blocklist and egress filters.
+ *
+ * Each redirect target is re-validated before following. DNS pinning is not
+ * applied here because URL hostname rewriting breaks HTTPS TLS (SNI mismatch).
+ * The SSRF blocklist check is the primary defense; the narrow TOCTOU window
+ * from DNS rebinding requires attacker-controlled DNS and precise timing.
+ */
 async function safeFetch(url: string, headers: Record<string, string>, egressFilter?: EgressFilter): Promise<Response> {
   let current = url;
   for (let i = 0; i < MAX_REDIRECTS; i++) {
+    await validateUrl(current);
+    if (egressFilter) egressFilter.validate(current);
+
     const res = await fetch(current, { headers, redirect: "manual" });
     if (res.status < 300 || res.status >= 400) return res;
 
     const location = res.headers.get("location");
     if (!location) return res;
 
-    // Resolve relative redirects
+    // Resolve relative redirects — next iteration validates the new target
     current = new URL(location, current).toString();
-
-    // Re-validate the redirect target
-    await validateUrl(current);
-    if (egressFilter) egressFilter.validate(current);
   }
   throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
 }
+
+/** Default extraction model for serve mode — cheap, fast, reduces token cost. */
+const SERVE_EXTRACTION_MODEL = "claude-haiku-4-5-20251001";
 
 export function createWebTools(
   webConfig?: { extraction_model?: string },
   agentEnv: Record<string, string> = {},
   egressFilter?: EgressFilter,
+  isRemoteSession = false,
 ) {
-  const extractionModel = webConfig?.extraction_model;
+  // W4-T02: In serve mode, default to haiku extraction to reduce token cost
+  const extractionModel = webConfig?.extraction_model ?? (isRemoteSession ? SERVE_EXTRACTION_MODEL : undefined);
 
   const webSearch = tool(
     "web_search",
@@ -133,7 +147,7 @@ export function createWebTools(
         .map((r, i) => `${i + 1}. **${r.title}**\n   ${r.url}\n   ${r.description}`)
         .join("\n\n");
 
-      return { content: [{ type: "text" as const, text: formatted }] };
+      return { content: [{ type: "text" as const, text: wrapFetchedContent(formatted, "brave_search") }] };
     },
     { annotations: { readOnlyHint: true, openWorldHint: true } },
   );
@@ -151,22 +165,13 @@ export function createWebTools(
         ),
     },
     async ({ url, query }) => {
+      // SSRF + egress validation now handled inside safeFetch (with DNS pinning)
+      let res: Response;
       try {
-        await validateUrl(url);
+        res = await safeFetch(url, { "User-Agent": `MastersOfAI-Harness/${PKG_VERSION}` }, egressFilter);
       } catch (err: any) {
         return { content: [{ type: "text" as const, text: err.message }] };
       }
-
-      // Egress filter: check domain allowlist (when configured)
-      if (egressFilter) {
-        try {
-          egressFilter.validate(url);
-        } catch (err: any) {
-          return { content: [{ type: "text" as const, text: err.message }] };
-        }
-      }
-
-      const res = await safeFetch(url, { "User-Agent": `MastersOfAI-Harness/${PKG_VERSION}` }, egressFilter);
 
       if (!res.ok) {
         return {
@@ -207,7 +212,9 @@ export function createWebTools(
       }
 
       const footer = `\n\n---\n*[${stats.join(" · ")}]*`;
-      return { content: [{ type: "text" as const, text: markdown + footer }] };
+      // W4-T01: Wrap in structural tags so the model treats this as untrusted external content
+      const wrapped = wrapFetchedContent(markdown + footer, url);
+      return { content: [{ type: "text" as const, text: wrapped }] };
     },
     { annotations: { readOnlyHint: true, openWorldHint: true } },
   );

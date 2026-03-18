@@ -69,7 +69,11 @@ export function createAgentServers(
   }
   if (isToolEnabled("web", config, toolFilter)) {
     const webEnv = credentialStore.resolveFlat("web");
-    servers[`${prefix}web`] = createServer(`${prefix}web`, createWebTools(config.tools.web, webEnv, egressFilter));
+    const isRemote = !!sandboxPolicy;
+    servers[`${prefix}web`] = createServer(
+      `${prefix}web`,
+      createWebTools(config.tools.web, webEnv, egressFilter, isRemote),
+    );
   }
   if (isToolEnabled("introspection", config, toolFilter)) {
     servers[`${prefix}introspection`] = createServer(

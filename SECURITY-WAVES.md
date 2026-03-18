@@ -114,9 +114,16 @@ Depends on Wave 2. ~1 week. Mostly ops/config, not code.
 
 ---
 
-## Wave 4: Defense in Depth — NOT STARTED
+## Wave 4: Defense in Depth — COMPLETE (2026-03-18)
 
-Can run parallel with Wave 2/3. ~1 week.
+See `PROGRESS.json` for detailed validation. All 9 tasks done, 203 unit tests pass.
+
+### Independent verification findings (addressed)
+- **IPv4-mapped IPv6 hex-short bypass**: `new URL()` normalizes `[::ffff:127.0.0.1]` to `::ffff:7f00:1` — `normalizeIp` now handles both dotted and hex-short forms
+- **DNS pinning breaks HTTPS**: URL hostname rewriting causes TLS SNI mismatch — reverted to validate-then-fetch; DNS pinning deferred to undici dispatcher (future)
+- **Protocol validation**: Added `http:`/`https:` check — rejects `file://`, `data://`, `ftp://`
+- **DNS null check**: `dns.lookup` result now null-checked before use
+- **web_search content tags**: Search results now wrapped in `<fetched_content>` tags like web_fetch
 
 | Task | Files | Description |
 |------|-------|-------------|
@@ -137,16 +144,16 @@ Must address all three SSRF hardening gaps:
 3. **Decimal/octal/hex IP encoding**: Normalize IP representations (0x7f000001 → 127.0.0.1, 2130706433 → 127.0.0.1, 0177.0.0.1 → 127.0.0.1) before range checking. Use `new URL()` normalization + explicit parsing.
 
 ### Verification checklist (Wave 4)
-- [ ] Fetched web content wrapped in `<fetched_content>` tags
-- [ ] System prompt contains untrusted content instruction
-- [ ] Memory content tagged as `<memory_context>`
-- [ ] Redirect to internal IP blocked by DNS rebinding defense
-- [ ] IPv4-mapped IPv6 addresses (::ffff:127.0.0.1) blocked
-- [ ] Decimal/octal/hex IP representations blocked
-- [ ] A2A server rejects unauthenticated requests
-- [ ] WS query param token logs deprecation warning
-- [ ] connectedClients Map does not contain raw token
-- [ ] Per-user log files created for remote sessions
+- [x] Fetched web content wrapped in `<fetched_content>` tags
+- [x] System prompt contains untrusted content instruction
+- [x] Memory content tagged as `<memory_context>`
+- [x] Redirect to internal IP blocked by DNS rebinding defense
+- [x] IPv4-mapped IPv6 addresses (::ffff:127.0.0.1) blocked
+- [x] Decimal/octal/hex IP representations blocked
+- [x] A2A server rejects unauthenticated requests
+- [x] WS query param token logs deprecation warning
+- [x] connectedClients Map does not contain raw token
+- [x] Per-user log files created for remote sessions
 
 ---
 

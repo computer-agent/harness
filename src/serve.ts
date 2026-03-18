@@ -11,6 +11,7 @@ import {
   type AccessUser,
   authenticateRequest,
   filterAgentsForUser,
+  hashToken,
   loadAccessConfig,
   lookupUser,
   userCanAccessAgent,
@@ -152,21 +153,26 @@ function agentToApiResponse(agent: AgentManifest): AgentApiResponse {
   };
 }
 
-function extractWsToken(request: FastifyRequest): string | null {
-  // 1. Query parameter
-  const queryToken = (request.query as Record<string, string>).token;
-  if (queryToken) return queryToken;
+interface WsTokenResult {
+  token: string;
+  source: "query" | "header" | "protocol";
+}
 
-  // 2. Authorization header
+function extractWsToken(request: FastifyRequest): WsTokenResult | null {
+  // 1. Query parameter (deprecated — W4-T06)
+  const queryToken = (request.query as Record<string, string>).token;
+  if (queryToken) return { token: queryToken, source: "query" };
+
+  // 2. Authorization header (preferred)
   const authHeader = request.headers.authorization;
-  if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
+  if (authHeader?.startsWith("Bearer ")) return { token: authHeader.slice(7), source: "header" };
 
   // 3. Protocol header (for browsers that can't set custom headers on WS)
   const protocols = request.headers["sec-websocket-protocol"];
   if (protocols) {
     const parts = (typeof protocols === "string" ? protocols : protocols[0]).split(",").map((s) => s.trim());
     const tokenProto = parts.find((p) => p.startsWith("token."));
-    if (tokenProto) return tokenProto.slice(6);
+    if (tokenProto) return { token: tokenProto.slice(6), source: "protocol" };
   }
 
   return null;
@@ -174,7 +180,8 @@ function extractWsToken(request: FastifyRequest): string | null {
 
 // ─── Connected WebSocket clients (for broadcasting) ───
 
-const connectedClients = new Map<WebSocket, { user: AccessUser; token: string }>();
+// W4-T07: Store token hash, not raw token — no raw credentials in memory after auth
+const connectedClients = new Map<WebSocket, { user: AccessUser; tokenHash: string }>();
 
 function broadcastToAll(message: object): void {
   const payload = JSON.stringify(message);
@@ -899,9 +906,9 @@ function registerWebSocketRoute(
       const clientIp = request.ip ?? "unknown";
 
       // Auth: read token from query param or headers
-      const token = extractWsToken(request);
-      const user = token ? lookupUser(token, opts.access) : null;
-      if (!token || !user) {
+      const tokenResult = extractWsToken(request);
+      const user = tokenResult ? lookupUser(tokenResult.token, opts.access) : null;
+      if (!tokenResult || !user) {
         // Rate limit auth failures per IP
         if (!rateLimiter.checkAuthFailure(clientIp)) {
           logger.warn("auth", "auth.failure", "Auth failure rate limited", {
@@ -916,6 +923,26 @@ function registerWebSocketRoute(
         ws.send(JSON.stringify({ type: "error", code: "auth_failed", message: "Invalid token" }));
         ws.close(4001, "Unauthorized");
         return;
+      }
+
+      // W4-T06: Deprecate query param token — warn client and log
+      if (tokenResult.source === "query") {
+        logger.warn(
+          "auth",
+          "auth.deprecated",
+          "WS token via query param is deprecated — use Authorization header or Sec-WebSocket-Protocol",
+          {
+            details: { userId: user.name, connectionId },
+          },
+        );
+        ws.send(
+          JSON.stringify({
+            type: "warning",
+            code: "token_query_deprecated",
+            message:
+              "Passing token as query parameter is deprecated. Use the Authorization header or Sec-WebSocket-Protocol instead.",
+          }),
+        );
       }
 
       // Connection limit per user
@@ -935,7 +962,8 @@ function registerWebSocketRoute(
       activeConnectionCount++;
 
       // Track connected client for broadcasting and token revocation
-      connectedClients.set(ws, { user, token });
+      // W4-T07: Store hash, not raw token — prevents credential leaks from memory dumps
+      connectedClients.set(ws, { user, tokenHash: hashToken(tokenResult.token) });
 
       ws.send(JSON.stringify({ type: "connected", connectionId }));
 
@@ -1213,10 +1241,10 @@ export async function startServer(opts: ServeOptions): Promise<void> {
           for (const entry of opts.access.users) {
             costTracker.setBudget(entry.name, entry.budget);
           }
-          // Disconnect revoked tokens
+          // Disconnect revoked tokens — compare stored hash against known hashes
           for (const [ws, clientInfo] of connectedClients) {
-            const user = lookupUser(clientInfo.token, opts.access);
-            if (!user) {
+            const stillValid = opts.access.users.some((entry) => entry.tokenHash === clientInfo.tokenHash);
+            if (!stillValid) {
               try {
                 ws.send(
                   JSON.stringify({ type: "error", code: "token_revoked", message: "Your access has been revoked" }),

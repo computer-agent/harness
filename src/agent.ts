@@ -12,6 +12,7 @@ import {
 import type { AgentContext } from "./agent-context.js";
 import { createAgentRegistry } from "./agents/index.js";
 import type { HarnessConfig } from "./config.js";
+import { UNTRUSTED_CONTENT_INSTRUCTION, wrapMemoryContext } from "./content-safety.js";
 import { CredentialStore, type CredentialsConfig } from "./credentials.js";
 import { EgressFilter } from "./egress-proxy.js";
 import type { Logger } from "./logger.js";
@@ -507,12 +508,15 @@ export async function buildSystemPrompt(ctx: AgentContext, config?: HarnessConfi
 
   const parts = [identity];
   if (memoryContext) {
+    // W4-T03: Wrap memory in structural tags — content is from prior sessions and may be untrusted
     parts.push(
-      `# Persistent Memory\n\nThe following is your accumulated context from previous sessions:\n\n${memoryContext}`,
+      `# Persistent Memory\n\nThe following is your accumulated context from previous sessions:\n\n${wrapMemoryContext(memoryContext)}`,
     );
   }
   parts.push(dateLine);
   parts.push(workspaceLine);
+  // W4-T01: Untrusted content instruction — teaches the model about content boundaries
+  parts.push(UNTRUSTED_CONTENT_INSTRUCTION);
 
   // B5: Environment onboarding (only when config is available — CLI/TUI mode)
   if (config) {
