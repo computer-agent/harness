@@ -334,6 +334,261 @@ if (args[0] === "credentials" && args[1] === "migrate") {
   process.exit(0);
 }
 
+// --- Subcommand: credentials check --agent <name> (W7-T17) ---
+
+if (args[0] === "credentials" && args[1] === "check") {
+  const targetAgent = getFlagValue("agent") ?? args[2] ?? config.defaultAgent ?? DEFAULT_AGENT;
+  let agentContext: ReturnType<typeof resolveAgent>;
+  try {
+    agentContext = resolveAgent(targetAgent);
+  } catch (err) {
+    if (err instanceof AgentNotFoundError) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    throw err;
+  }
+
+  const agentEnvKeys = loadAgentEnv(agentContext.agentDir);
+  const { manifest } = await buildSystemPrompt(agentContext, config);
+  const credsCfg = manifest.frontmatter.credentials;
+
+  console.log(`Agent: ${targetAgent}`);
+  if (!credsCfg?.grants) {
+    console.log("Mode: legacy (no credentials config — all env keys available to all tools)");
+    const keys = Object.keys(agentEnvKeys).filter((k) => k !== "DOTENV_PRIVATE_KEY");
+    if (keys.length > 0) {
+      console.log(`Keys: ${keys.join(", ")}`);
+    } else {
+      console.log("Keys: (none)");
+    }
+  } else {
+    console.log("Mode: strict (credentials config present)");
+    for (const [grantName, grant] of Object.entries(credsCfg.grants)) {
+      const grantKeys = (grant as any).keys as string[];
+      const tools = (grant as any).tools as string[];
+      const approval = (grant as any).approval;
+      const present = grantKeys.filter((k) => k in agentEnvKeys);
+      const missing = grantKeys.filter((k) => !(k in agentEnvKeys));
+      console.log(`\n  Grant: ${grantName}`);
+      console.log(`    Tools: ${tools.join(", ")}`);
+      if (approval) console.log(`    Approval: ${approval}`);
+      if (present.length > 0) console.log(`    Present: ${present.join(", ")}`);
+      if (missing.length > 0) console.log(`    MISSING: ${missing.join(", ")}`);
+    }
+  }
+  process.exit(0);
+}
+
+// --- Subcommand: access create --name <name> --agents <list> (W7-T18) ---
+
+if (args[0] === "access" && args[1] === "create") {
+  const name = getFlagValue("name") ?? args[2];
+  const agentsList = getFlagValue("agents") ?? "*";
+  if (!name) {
+    console.error("Usage: mastersof-ai access create --name <name> [--agents <a,b,...>]");
+    process.exit(1);
+  }
+
+  const { generateAccessToken } = await import("./access.js");
+  const { getHomeDir } = await import("./config.js");
+  const { stringify } = await import("yaml");
+
+  const { token, tokenHash } = generateAccessToken();
+  const agents = agentsList === "*" ? "*" : agentsList.split(",").map((s) => s.trim());
+
+  const entry = {
+    token_hash: tokenHash,
+    name,
+    agents,
+    budget: "unlimited",
+  };
+
+  const accessPath = join(getHomeDir(), "access.yaml");
+  let existing: { users?: unknown[] } = { users: [] };
+  try {
+    const raw = readFileSync(accessPath, "utf-8");
+    const { parse } = await import("yaml");
+    const parsed = parse(raw);
+    if (parsed && typeof parsed === "object") {
+      existing = parsed;
+    } else {
+      console.warn(`Warning: ${accessPath} exists but contains no valid YAML object. Starting fresh.`);
+    }
+  } catch (err: unknown) {
+    // ENOENT = file doesn't exist → start fresh (normal).
+    // Anything else = malformed YAML → warn and overwrite.
+    if (err && typeof err === "object" && "code" in err && (err as any).code !== "ENOENT") {
+      console.warn(`Warning: ${accessPath} could not be parsed. Existing content will be overwritten.`);
+    }
+  }
+
+  if (!existing.users) existing.users = [];
+  existing.users.push(entry);
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(accessPath, stringify(existing), "utf-8");
+
+  console.log(`Token created for "${name}"`);
+  console.log(`Agents: ${typeof agents === "string" ? agents : agents.join(", ")}`);
+  console.log(`\nRaw token (give to partner — shown once):\n  ${token}\n`);
+  console.log(`Saved to: ${accessPath}`);
+  process.exit(0);
+}
+
+// --- Subcommand: access rotate --name <name> (W7-T21) ---
+
+if (args[0] === "access" && args[1] === "rotate") {
+  const name = getFlagValue("name") ?? args[2];
+  if (!name) {
+    console.error("Usage: mastersof-ai access rotate --name <name>");
+    process.exit(1);
+  }
+
+  const { generateAccessToken } = await import("./access.js");
+  const { getHomeDir } = await import("./config.js");
+  const { parse, stringify } = await import("yaml");
+
+  const accessPath = join(getHomeDir(), "access.yaml");
+  let existing: { users?: Array<{ token_hash: string; name: string; [k: string]: unknown }> };
+  try {
+    existing = parse(readFileSync(accessPath, "utf-8")) ?? { users: [] };
+  } catch {
+    console.error("No access.yaml found.");
+    process.exit(1);
+  }
+
+  const userEntry = existing.users?.find((u) => u.name === name);
+  if (!userEntry) {
+    console.error(`User "${name}" not found in access.yaml.`);
+    process.exit(1);
+  }
+
+  const { token, tokenHash } = generateAccessToken();
+  const oldHash = userEntry.token_hash;
+  userEntry.token_hash = tokenHash;
+
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(accessPath, stringify(existing), "utf-8");
+
+  console.log(`Token rotated for "${name}"`);
+  console.log(`Old hash: ${oldHash.slice(0, 12)}...`);
+  console.log(`New hash: ${tokenHash.slice(0, 12)}...`);
+  console.log(`\nNew raw token (give to partner — shown once):\n  ${token}\n`);
+  console.log("The file watcher will disconnect active sessions using the old token.");
+  process.exit(0);
+}
+
+// --- Subcommand: status <agent> (W7-T19) ---
+
+if (args[0] === "status") {
+  const targetAgent = args[1] ?? config.defaultAgent ?? DEFAULT_AGENT;
+  // Validate agent name to prevent path traversal (review fix: Sec #7a)
+  try {
+    resolveAgent(targetAgent);
+  } catch (err) {
+    if (err instanceof AgentNotFoundError) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    throw err;
+  }
+  const { getHomeDir } = await import("./config.js");
+
+  const runsPath = join(getHomeDir(), "state", targetAgent, "runs.jsonl");
+  try {
+    const content = readFileSync(runsPath, "utf-8").trim();
+    if (!content) {
+      console.log(`No runs found for agent "${targetAgent}".`);
+      process.exit(0);
+    }
+    const lines = content.split("\n").slice(-10); // last 10 runs
+    console.log(`Recent runs for "${targetAgent}":\n`);
+    for (const line of lines) {
+      try {
+        const run = JSON.parse(line);
+        const date = run.timestamp ? new Date(run.timestamp).toLocaleString() : "unknown";
+        const status = run.exitCode === 0 ? "OK" : `FAIL(${run.exitCode})`;
+        const duration = run.durationMs ? `${Math.round(run.durationMs / 1000)}s` : "?";
+        console.log(`  ${date}  ${status}  ${duration}  ${(run.message ?? "").slice(0, 60)}`);
+      } catch {
+        // Skip malformed lines
+      }
+    }
+  } catch {
+    console.log(`No runs found for agent "${targetAgent}".`);
+  }
+  process.exit(0);
+}
+
+// --- Subcommand: preflight --agent <name> (W7-T20) ---
+
+if (args[0] === "preflight") {
+  const targetAgent = getFlagValue("agent") ?? args[1] ?? config.defaultAgent ?? DEFAULT_AGENT;
+  let allOk = true;
+
+  const check = (label: string, ok: boolean, detail?: string) => {
+    const mark = ok ? "OK" : "FAIL";
+    console.log(`  [${mark}] ${label}${detail ? ` — ${detail}` : ""}`);
+    if (!ok) allOk = false;
+  };
+
+  console.log(`Preflight check for agent "${targetAgent}":\n`);
+
+  // 1. Agent exists
+  let agentContext: ReturnType<typeof resolveAgent> | null = null;
+  try {
+    agentContext = resolveAgent(targetAgent);
+    check("Agent exists", true, agentContext.agentDir);
+  } catch {
+    check("Agent exists", false, "Agent not found");
+    process.exit(1);
+  }
+
+  // 2. IDENTITY.md parseable
+  let manifest: Awaited<ReturnType<typeof buildSystemPrompt>>["manifest"] | null = null;
+  try {
+    const result = await buildSystemPrompt(agentContext, config);
+    manifest = result.manifest;
+    check("IDENTITY.md parseable", true);
+  } catch (err) {
+    check("IDENTITY.md parseable", false, err instanceof Error ? err.message : String(err));
+  }
+
+  // 3. Credentials present
+  const agentEnvKeys = loadAgentEnv(agentContext.agentDir);
+  const credsCfg = manifest?.frontmatter.credentials;
+  if (credsCfg?.grants) {
+    for (const [grantName, grant] of Object.entries(credsCfg.grants)) {
+      const grantKeys = (grant as any).keys as string[];
+      const missing = grantKeys.filter((k) => !(k in agentEnvKeys));
+      check(
+        `Credentials: ${grantName}`,
+        missing.length === 0,
+        missing.length > 0 ? `missing: ${missing.join(", ")}` : undefined,
+      );
+    }
+  } else {
+    check("Credentials config", true, "legacy mode (no grants)");
+  }
+
+  // 4. Sandbox config
+  const sandbox = manifest?.frontmatter.sandbox;
+  if (sandbox?.enforce) {
+    check("Sandbox enforced", true);
+    if (sandbox.allowedDomains && sandbox.allowedDomains.length > 0) {
+      check("Egress allowlist", true, `${sandbox.allowedDomains.length} domains`);
+    }
+  } else {
+    check("Sandbox", true, "not enforced (agent controls its own tools)");
+  }
+
+  // 5. API key
+  check("ANTHROPIC_API_KEY", !!process.env.ANTHROPIC_API_KEY);
+
+  console.log(allOk ? "\nAll checks passed." : "\nSome checks failed.");
+  process.exit(allOk ? 0 : 1);
+}
+
 // --- Flag: --serve (server mode) ---
 
 if (getFlag("serve")) {

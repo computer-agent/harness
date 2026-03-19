@@ -22,6 +22,12 @@ interface SdkMessage {
 }
 
 // ─── Extracted event types ───
+//
+// Why `kind` and not `type`?
+// The raw SDK messages and IPC/WS protocols both use `type` as their discriminant.
+// Using `kind` here avoids ambiguity: `event.kind` is always the SdkEvent discriminant,
+// `event.type` would shadow the raw message's `type` field. Do NOT rename to `type`.
+//
 
 export interface SdkInitEvent {
   kind: "init";
@@ -46,12 +52,12 @@ export interface SdkToolUseStartEvent {
 
 export interface SdkToolInputDeltaEvent {
   kind: "tool_input_delta";
-  toolId: string;
+  toolId: string | null;
   partialJson: string;
 }
 
-export interface SdkToolBlockStopEvent {
-  kind: "tool_block_stop";
+export interface SdkContentBlockStopEvent {
+  kind: "content_block_stop";
 }
 
 export interface SdkTextBlockStartEvent {
@@ -108,7 +114,7 @@ export type SdkEvent =
   | SdkThinkingTokenEvent
   | SdkToolUseStartEvent
   | SdkToolInputDeltaEvent
-  | SdkToolBlockStopEvent
+  | SdkContentBlockStopEvent
   | SdkTextBlockStartEvent
   | SdkMessageStartEvent
   | SdkSubagentStartedEvent
@@ -214,9 +220,10 @@ export function extractSdkEvent(raw: unknown): SdkEvent | null {
         return { kind: "thinking_token", text: delta.thinking as string };
       }
       if (delta.type === "input_json_delta") {
+        const rawId = contentBlock?.id as string | undefined;
         return {
           kind: "tool_input_delta",
-          toolId: (contentBlock?.id as string) ?? "",
+          toolId: rawId || null,
           partialJson: (delta.partial_json as string) ?? "",
         };
       }
@@ -224,7 +231,7 @@ export function extractSdkEvent(raw: unknown): SdkEvent | null {
 
     // content_block_stop
     if (eventType === "content_block_stop") {
-      return { kind: "tool_block_stop" };
+      return { kind: "content_block_stop" };
     }
 
     return null;

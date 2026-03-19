@@ -26,6 +26,7 @@ import type {
   IpcToolApprovalRequest,
   IpcUserMessage,
   ParentToWorkerMessage,
+  WorkerConfig,
   WorkerToParentMessage,
 } from "./ipc-protocol.js";
 import { Logger } from "./logger.js";
@@ -36,6 +37,9 @@ import { extractSdkEvent } from "./sdk-stream.js";
 // ─── Worker state ───
 
 let agentContext: AgentContext | null = null;
+// W7-T11: Worker receives only the config subset it needs (WorkerConfig),
+// but agent.ts buildOptions expects HarnessConfig. The unused fields are
+// harmless — we cast because WorkerConfig is a structural subset.
 let config: HarnessConfig | null = null;
 let manifest: AgentManifest | null = null;
 let agentEnv: Record<string, string> = {};
@@ -45,6 +49,11 @@ let logger: Logger | undefined;
 
 let activeQuery: Query | null = null;
 let sessionId: string | null = null;
+
+// W7-T04: Module-scoped frame ID — monotonically increasing across messages.
+// Per-message reset (old behavior) broke MessageBuffer.since(lastMessageId) on reconnection
+// because IDs restarted at 0 after the first turn.
+let frameId = 0;
 
 // Pending tool approval promises — keyed by toolId
 const pendingApprovals = new Map<string, (approved: boolean) => void>();
@@ -76,7 +85,7 @@ async function handleInit(msg: IpcInitMessage): Promise<void> {
   try {
     userId = msg.userId;
     userToolsDeny = msg.accessUser.toolsDeny;
-    config = JSON.parse(msg.configJson) as HarnessConfig;
+    config = JSON.parse(msg.configJson) as WorkerConfig as HarnessConfig;
     logger = new Logger(config.serve?.logging?.level ?? "info", {
       userId,
       agentId: msg.agentId,
@@ -169,8 +178,8 @@ async function handleMessage(msg: IpcUserMessage): Promise<void> {
   let wasInterrupted = false;
   const accumulatedUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
   const toolCallNames: { name: string; status: string }[] = [];
-  // Track an incrementing message ID for buffered frames
-  let frameId = 0;
+  // W7-T03: Track active toolId from tool_use_start for input delta frames
+  let activeToolId: string | null = null;
 
   let q: ReturnType<typeof sendMessage>;
   try {
@@ -207,6 +216,8 @@ async function handleMessage(msg: IpcUserMessage): Promise<void> {
   }
   activeQuery = q;
 
+  let hadError = false;
+
   try {
     for await (const sdkMsg of q) {
       const event = extractSdkEvent(sdkMsg);
@@ -234,6 +245,7 @@ async function handleMessage(msg: IpcUserMessage): Promise<void> {
           break;
 
         case "tool_use_start":
+          activeToolId = event.toolId;
           sendFrame({
             type: "tool_use_start",
             id: frameId++,
@@ -244,13 +256,18 @@ async function handleMessage(msg: IpcUserMessage): Promise<void> {
           toolCallNames.push({ name: event.toolName, status: "complete" });
           break;
 
-        case "tool_input_delta":
-          sendFrame({
-            type: "tool_use_input",
-            toolId: event.toolId,
-            partialJson: event.partialJson,
-          });
+        case "tool_input_delta": {
+          // W7-T03: Use tracked activeToolId when SDK delta lacks contentBlock.id
+          const toolId = event.toolId ?? activeToolId;
+          if (toolId) {
+            sendFrame({
+              type: "tool_use_input",
+              toolId,
+              partialJson: event.partialJson,
+            });
+          }
           break;
+        }
 
         case "subagent_started":
           sendFrame({
@@ -294,17 +311,41 @@ async function handleMessage(msg: IpcUserMessage): Promise<void> {
           break;
         }
 
+        case "content_block_stop":
+          activeToolId = null;
+          break;
+
+        case "text_block_start":
+        case "message_start":
+          // Handled by TUI only — no-op in worker
+          break;
+
         case "result":
           wasInterrupted = event.isInterrupted;
           break;
+
+        default: {
+          // W7-T07: Exhaustive check — adding a new SdkEvent kind without handling it here
+          // causes a compile error (Type 'SdkXxxEvent' is not assignable to type 'never').
+          const _exhaustive: never = event;
+          void _exhaustive;
+        }
       }
     }
   } catch (err) {
+    hadError = true;
     const errMsg = err instanceof Error ? err.message : String(err);
     sendError("query_error", errMsg);
   }
 
   activeQuery = null;
+
+  // W7-T05: Skip result IPC if we already sent an error — the settled flag makes
+  // the duplicate harmless, but it's wasteful traffic and confusing in logs.
+  if (hadError) {
+    if (shuttingDown) process.exit(0);
+    return;
+  }
 
   // Send result to parent
   const result: IpcResultMessage = {
@@ -382,6 +423,12 @@ process.on("message", async (raw: unknown) => {
       case "shutdown":
         handleShutdown();
         break;
+      default: {
+        // Exhaustive check — adding a new ParentToWorkerMessage type without
+        // handling it here causes a compile error.
+        const _exhaustive: never = msg;
+        void _exhaustive;
+      }
     }
   } catch (err) {
     sendError("worker_error", err instanceof Error ? err.message : String(err));

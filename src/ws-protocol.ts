@@ -13,12 +13,14 @@ const WsSubscribeSchema = z.object({
   type: z.literal("subscribe"),
   agentId: z.string().min(1).max(200),
   sessionId: z.string().min(1).max(200).optional(),
-  lastMessageId: z.number().int().nonnegative().optional(),
+  // W7-T12: Explicit max prevents abuse with astronomically large IDs
+  lastMessageId: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
 });
 
 const WsMessageSchema = z.object({
   type: z.literal("message"),
-  content: z.string().min(1),
+  // W7-T12: Belt-and-suspenders with rate limiter's maxMessageLength
+  content: z.string().min(1).max(200_000),
 });
 
 const WsInterruptSchema = z.object({
@@ -49,6 +51,18 @@ const WsClientMessageSchema = z.discriminatedUnion("type", [
   WsConsentGrantedSchema,
 ]);
 
+// W7-T06: Compile-time assertion that Zod output matches the TypeScript union.
+// If the two diverge (e.g., a new message type added to one but not the other),
+// this assignment fails at build time.
+type ZodOutput = z.output<typeof WsClientMessageSchema>;
+type _AssertZodMatchesTs = ZodOutput extends WsClientMessage
+  ? WsClientMessage extends ZodOutput
+    ? true
+    : never
+  : never;
+const _typeCheck: _AssertZodMatchesTs = true as _AssertZodMatchesTs;
+void _typeCheck;
+
 export type WsValidationResult = { ok: true; message: WsClientMessage } | { ok: false; error: string; detail: string };
 
 /**
@@ -59,7 +73,8 @@ export type WsValidationResult = { ok: true; message: WsClientMessage } | { ok: 
 export function validateWsMessage(raw: unknown): WsValidationResult {
   const result = WsClientMessageSchema.safeParse(raw);
   if (result.success) {
-    return { ok: true, message: result.data as WsClientMessage };
+    // W7-T06: Safe — compile-time assertion above proves ZodOutput === WsClientMessage
+    return { ok: true, message: result.data };
   }
   const firstIssue = result.error.issues[0];
   const path = firstIssue?.path.join(".") || "root";

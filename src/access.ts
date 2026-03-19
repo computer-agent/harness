@@ -34,8 +34,14 @@ export function hashToken(token: string): string {
 }
 
 /**
- * Constant-time comparison of two hex strings.
+ * Constant-time comparison of two strings.
  * Prevents timing side-channel attacks on token validation.
+ *
+ * **Important:** `timingSafeEqual` is only constant-time when both inputs
+ * have equal length. The early-return on length mismatch is safe because
+ * all current callers compare fixed-length SHA-256 hex digests (64 chars).
+ * If this function is ever used with variable-length inputs, the length
+ * check itself leaks timing information about the expected length.
  */
 export function safeCompare(a: string, b: string): boolean {
   const bufA = Buffer.from(a);

@@ -21,7 +21,12 @@ import { getConfigPath, getHomeDir, type HarnessConfig, loadConfig } from "./con
 import { CostTracker } from "./cost.js";
 import { classifyError } from "./errors.js";
 import { HealthMonitor } from "./health.js";
-import type { IpcResultMessage, WorkerToParentMessage } from "./ipc-protocol.js";
+import {
+  ALLOWED_FRAME_TYPES,
+  type IpcResultMessage,
+  type WorkerConfig,
+  type WorkerToParentMessage,
+} from "./ipc-protocol.js";
 import { Logger } from "./logger.js";
 import type { AgentManifest } from "./manifest.js";
 import { MessageBuffer } from "./message-buffer.js";
@@ -46,7 +51,7 @@ import {
   saveSession,
   touchSession,
 } from "./sessions.js";
-import type { WsAssistantMessage } from "./types/ws.js";
+import type { WsAssistantMessage, WsToken, WsToolUseStart } from "./types/ws.js";
 import { UsageTracker } from "./usage.js";
 import { FileWatcher } from "./watcher.js";
 import { WorkerManager } from "./worker-manager.js";
@@ -66,6 +71,36 @@ export interface ServeOptions {
   host: string;
   config: HarnessConfig;
   access: AccessConfig;
+}
+
+// ─── WebSocket safe-send helper (W7-T10) ───
+
+/**
+ * Wraps `ws.send(JSON.stringify(data))` in a try/catch.
+ * Prevents cascading throws on closed sockets in post-processing,
+ * error paths, and approval cleanup.
+ */
+function safeSend(ws: WebSocket, data: unknown): boolean {
+  try {
+    ws.send(JSON.stringify(data));
+    return true;
+  } catch {
+    // Socket already closed — nothing we can do
+    return false;
+  }
+}
+
+// ─── Worker config subset (W7-T11) ───
+
+/** Extract only the config fields the worker process needs. */
+function toWorkerConfig(config: HarnessConfig): WorkerConfig {
+  return {
+    model: config.model,
+    effort: config.effort,
+    tools: config.tools,
+    hooks: config.hooks,
+    serve: config.serve?.logging ? { logging: config.serve.logging } : undefined,
+  };
 }
 
 // ─── Health tracking counters ───
@@ -522,7 +557,7 @@ async function handleMessage(
   const release = await queryMutex.acquire(mutexKey, 5 * 60 * 1000);
 
   try {
-    ws.send(JSON.stringify({ type: "status", status: "thinking" }));
+    safeSend(ws, { type: "status", status: "thinking" });
 
     let userMessagePersisted = false;
 
@@ -561,28 +596,20 @@ async function handleMessage(
             case "frame": {
               // F2: Validate frame type against allowlist before relaying to WebSocket.
               // A compromised worker could inject arbitrary JSON — only relay known frame types.
+              // W7-T08: ALLOWED_FRAME_TYPES now lives in ipc-protocol.ts at module scope.
               const frame = workerMsg.frame;
-              const ALLOWED_FRAME_TYPES = new Set([
-                "status",
-                "token",
-                "thinking_token",
-                "tool_use_start",
-                "tool_use_input",
-                "tool_result",
-                "subagent_started",
-                "subagent_progress",
-                "subagent_done",
-              ]);
               if (!frame.type || !ALLOWED_FRAME_TYPES.has(frame.type as string)) {
                 logger.warn("session", "worker.frame_rejected", `Rejected unknown frame type: ${frame.type}`, {
                   details: { workerKey },
                 });
                 break;
               }
+              // W7-T09: Narrowed types replace the `as any` cast — frame shape
+              // is validated by ALLOWED_FRAME_TYPES, and only bufferable types are pushed.
               if (frame.type === "token" || frame.type === "tool_use_start") {
-                conversation.messageBuffer.push(frame as any);
+                conversation.messageBuffer.push(frame as unknown as WsToken | WsToolUseStart);
               }
-              ws.send(JSON.stringify(frame));
+              safeSend(ws, frame);
               break;
             }
 
@@ -620,15 +647,13 @@ async function handleMessage(
                   approved,
                 });
               });
-              ws.send(
-                JSON.stringify({
-                  type: "tool_approval",
-                  toolId: workerMsg.toolId,
-                  toolName: workerMsg.toolName,
-                  toolInput: workerMsg.toolInput,
-                  question: `Allow ${workerMsg.toolName}?`,
-                }),
-              );
+              safeSend(ws, {
+                type: "tool_approval",
+                toolId: workerMsg.toolId,
+                toolName: workerMsg.toolName,
+                toolInput: workerMsg.toolInput,
+                question: `Allow ${workerMsg.toolName}?`,
+              });
               break;
 
             case "result":
@@ -638,15 +663,19 @@ async function handleMessage(
             case "error":
               // W6-T02: Worker errors (especially init_failed) must settle the promise
               // so the exit handler's safeReject is a no-op — prevents double error to client.
-              ws.send(
-                JSON.stringify({
-                  type: "error",
-                  code: workerMsg.code,
-                  message: workerMsg.message,
-                }),
-              );
+              safeSend(ws, {
+                type: "error",
+                code: workerMsg.code,
+                message: workerMsg.message,
+              });
               safeReject(new Error(`Worker error [${workerMsg.code}]: ${workerMsg.message}`));
               break;
+            default: {
+              // Exhaustive check — adding a new WorkerToParentMessage type without
+              // handling it here causes a compile error.
+              const _exhaustive: never = workerMsg;
+              void _exhaustive;
+            }
           }
         } catch (err) {
           logger.error("session", "worker.handler_error", `Worker message handler error: ${err}`, {
@@ -677,17 +706,11 @@ async function handleMessage(
         if (conversation.pendingApprovals.size > 0) {
           for (const [toolId, resolver] of conversation.pendingApprovals) {
             resolver(false); // deny
-            try {
-              ws.send(
-                JSON.stringify({
-                  type: "tool_approval_rejected",
-                  toolId,
-                  reason: "Worker process exited",
-                }),
-              );
-            } catch {
-              // WS may already be closed
-            }
+            safeSend(ws, {
+              type: "tool_approval_rejected",
+              toolId,
+              reason: "Worker process exited",
+            });
           }
           conversation.pendingApprovals.clear();
         }
@@ -700,7 +723,7 @@ async function handleMessage(
           workerKey,
           conversation.agentId,
           user.name,
-          JSON.stringify(config),
+          JSON.stringify(toWorkerConfig(config)),
           user.toolsDeny,
           workerMessageHandler,
           workerExitHandler,
@@ -733,7 +756,7 @@ async function handleMessage(
         },
       };
       conversation.messageBuffer.push(frame);
-      ws.send(JSON.stringify(frame));
+      safeSend(ws, frame);
 
       // Persist assistant message
       if (conversation.sessionId) {
@@ -754,40 +777,34 @@ async function handleMessage(
       costTracker.recordUsage(user.name, conversation.sessionId, result.usage.inputTokens, result.usage.outputTokens);
       const postBudget = costTracker.checkBudget(user.name, conversation.sessionId);
       if (postBudget.warnings.length > 0) {
-        ws.send(JSON.stringify({ type: "budget_warning", warnings: postBudget.warnings }));
+        safeSend(ws, { type: "budget_warning", warnings: postBudget.warnings });
       }
       if (!postBudget.allowed && postBudget.exceeded) {
-        ws.send(
-          JSON.stringify({
-            type: "budget_exceeded",
-            reason: postBudget.exceeded.budget,
-            limit: postBudget.exceeded.limit,
-            used: postBudget.exceeded.used,
-            resetsAt: postBudget.exceeded.resetsAt,
-          }),
-        );
+        safeSend(ws, {
+          type: "budget_exceeded",
+          reason: postBudget.exceeded.budget,
+          limit: postBudget.exceeded.limit,
+          used: postBudget.exceeded.used,
+          resetsAt: postBudget.exceeded.resetsAt,
+        });
       }
     }
 
     // Final result frame
-    ws.send(
-      JSON.stringify({
-        type: "result",
-        sessionId: conversation.sessionId,
-        interrupted: result.interrupted,
-        usage: {
-          inputTokens: result.usage.inputTokens,
-          outputTokens: result.usage.outputTokens,
-        },
-      }),
-    );
+    safeSend(ws, {
+      type: "result",
+      sessionId: conversation.sessionId,
+      interrupted: result.interrupted,
+      usage: {
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+      },
+    });
 
-    ws.send(
-      JSON.stringify({
-        type: "status",
-        status: result.interrupted ? "interrupted" : "idle",
-      }),
-    );
+    safeSend(ws, {
+      type: "status",
+      status: result.interrupted ? "interrupted" : "idle",
+    });
 
     // Touch session
     if (conversation.sessionId) {
@@ -810,22 +827,18 @@ async function handleMessage(
     }
     // W6: MutexTimeoutError → specific "busy" code so client can retry
     if (err instanceof MutexTimeoutError) {
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          code: "busy",
-          message: "Agent is busy processing another request. Please try again.",
-        }),
-      );
+      safeSend(ws, {
+        type: "error",
+        code: "busy",
+        message: "Agent is busy processing another request. Please try again.",
+      });
     } else {
       const classified = classifyError(err);
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          code: classified.category,
-          message: classified.message,
-        }),
-      );
+      safeSend(ws, {
+        type: "error",
+        code: classified.category,
+        message: classified.message,
+      });
     }
   } finally {
     release();
@@ -1048,17 +1061,11 @@ function registerWebSocketRoute(
           }
         } catch (err) {
           const classified = classifyError(err);
-          try {
-            ws.send(
-              JSON.stringify({
-                type: "error",
-                code: classified.category,
-                message: classified.message,
-              }),
-            );
-          } catch {
-            // Connection already closed — nothing we can do
-          }
+          safeSend(ws, {
+            type: "error",
+            code: classified.category,
+            message: classified.message,
+          });
         }
       });
 
@@ -1150,18 +1157,13 @@ export async function startServer(opts: ServeOptions): Promise<void> {
   const queryMutex = new QueryMutex();
 
   // Health monitoring
-  // W6-T09: includes worker pool stats
+  // W6-T09 + W7-T15: Worker pool stats via workerManager.getStats()
   const healthMonitor = new HealthMonitor(
     PKG_VERSION,
     () => activeSessionCount,
     () => activeConnectionCount,
     logger,
-    () => ({
-      active: workerManager.size,
-      max: workerManager.capacity,
-      utilization:
-        workerManager.capacity > 0 ? Math.round((workerManager.size / workerManager.capacity) * 1000) / 1000 : 0,
-    }),
+    () => workerManager.getStats(),
   );
 
   // Track error/success rates via Fastify response hook

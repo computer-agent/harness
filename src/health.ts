@@ -51,6 +51,10 @@ export class HealthMonitor {
   private deepCache: { result: DeepHealth; timestamp: number } | null = null;
   private readonly CACHE_TTL_MS = 30_000; // 30 seconds
   private readonly ERROR_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+  // W7-T14: Prune threshold — every N insertions, trim entries older than 1 hour.
+  // Prevents unbounded memory growth under sustained load without deep health checks.
+  private readonly PRUNE_THRESHOLD = 1000;
+  private insertionCount = 0;
   private isShuttingDown = false;
 
   constructor(
@@ -71,10 +75,21 @@ export class HealthMonitor {
 
   recordError(): void {
     this.errors.push(Date.now());
+    this.maybePrune();
   }
 
   recordSuccess(): void {
     this.successes.push(Date.now());
+    this.maybePrune();
+  }
+
+  /** W7-T14: Prune old entries every PRUNE_THRESHOLD insertions. */
+  private maybePrune(): void {
+    if (++this.insertionCount < this.PRUNE_THRESHOLD) return;
+    this.insertionCount = 0;
+    const cutoff = Date.now() - this.ERROR_WINDOW_MS;
+    this.errors = this.errors.filter((t) => t > cutoff);
+    this.successes = this.successes.filter((t) => t > cutoff);
   }
 
   shallowCheck(): ShallowHealth {

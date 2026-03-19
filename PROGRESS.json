@@ -1,122 +1,250 @@
 {
-  "wave": "Wave 6: Process Isolation Hardening",
+  "wave": "Wave 7: Review Hardening + Type Safety + Observability",
   "started": "2026-03-18",
   "updatedAt": "2026-03-18",
   "status": "complete",
   "items": [
     {
-      "id": "W6-T01",
-      "name": "SDK stream processing shared abstraction",
+      "id": "W7-T01",
+      "name": "Rename tool_block_stop → content_block_stop",
       "status": "completed",
-      "files": ["src/sdk-stream.ts", "src/session-worker.ts", "src/components/App.tsx"],
+      "files": ["src/sdk-stream.ts", "src/components/App.tsx", "src/session-worker.test.ts"],
       "validation": [
-        "SdkStreamProcessor extracted to src/sdk-stream.ts — 15 typed event kinds, single extractSdkEvent() function ✓",
-        "session-worker.ts uses shared processor — all `as any` casts removed from stream loop ✓",
-        "App.tsx uses shared processor — all `as any` casts removed from stream loop ✓",
-        "15 unit tests for extractSdkEvent covering all event kinds + null cases ✓",
-        "Full test suite (264 tests) passes — no behavioral regression ✓",
+        "SdkContentBlockStopEvent type renamed, kind value is 'content_block_stop' ✓",
+        "App.tsx switch case updated to 'content_block_stop' ✓",
+        "session-worker.ts handles 'content_block_stop' (clears activeToolId) ✓",
+        "Test updated and passing: extractSdkEvent returns content_block_stop kind ✓"
+      ]
+    },
+    {
+      "id": "W7-T02",
+      "name": "Document kind discriminant choice",
+      "status": "completed",
+      "files": ["src/sdk-stream.ts"],
+      "validation": ["Comment block added explaining why 'kind' not 'type' — prevents future 'fix' attempts ✓"]
+    },
+    {
+      "id": "W7-T03",
+      "name": "Fix tool_input_delta toolId extraction",
+      "status": "completed",
+      "files": ["src/sdk-stream.ts", "src/session-worker.ts"],
+      "validation": [
+        "SdkToolInputDeltaEvent.toolId type changed to string | null ✓",
+        "extractSdkEvent returns null (not empty string) when contentBlock.id absent ✓",
+        "session-worker.ts tracks activeToolId from tool_use_start ✓",
+        "tool_input_delta uses activeToolId as fallback; drops frame if both null ✓",
+        "2 new tests: null toolId when absent, valid toolId when present ✓"
+      ]
+    },
+    {
+      "id": "W7-T04",
+      "name": "Promote frameId to module scope",
+      "status": "completed",
+      "files": ["src/session-worker.ts"],
+      "validation": [
+        "frameId declared at module scope (line ~52), monotonically increasing across messages ✓",
+        "Comment explains why: per-message reset broke MessageBuffer.since() on reconnect ✓"
+      ]
+    },
+    {
+      "id": "W7-T05",
+      "name": "Guard result send after error",
+      "status": "completed",
+      "files": ["src/session-worker.ts"],
+      "validation": [
+        "hadError flag set in catch block ✓",
+        "Result IPC skipped when hadError is true — early return after shutdown check ✓",
+        "No behavioral change (settled flag still protects parent), reduces wasteful IPC ✓"
+      ]
+    },
+    {
+      "id": "W7-T06",
+      "name": "Single source of truth for WS client types",
+      "status": "completed",
+      "files": ["src/ws-protocol.ts", "src/types/ws.ts"],
+      "validation": [
+        "Compile-time assertion: ZodOutput extends WsClientMessage extends ZodOutput ✓",
+        "Build fails if Zod schema and TypeScript union diverge ✓",
+        "Removed `as WsClientMessage` cast from validateWsMessage ✓",
         "TypeScript compiles with zero errors ✓"
       ]
     },
     {
-      "id": "W6-T02",
-      "name": "Double error on worker init failure",
+      "id": "W7-T07",
+      "name": "Exhaustive switch enforcement",
+      "status": "completed",
+      "files": ["src/session-worker.ts", "src/components/App.tsx"],
+      "validation": [
+        "session-worker.ts switch has default: { const _: never = event; } ✓",
+        "App.tsx switch has default: { const _: never = event; } ✓",
+        "session-worker.ts now handles content_block_stop, text_block_start, message_start (no-op) ✓",
+        "Adding a new SdkEvent kind without handling it causes compile error ✓"
+      ]
+    },
+    {
+      "id": "W7-T08",
+      "name": "Extract ALLOWED_FRAME_TYPES to ipc-protocol.ts",
+      "status": "completed",
+      "files": ["src/ipc-protocol.ts", "src/serve.ts"],
+      "validation": [
+        "ALLOWED_FRAME_TYPES exported from ipc-protocol.ts at module scope ✓",
+        "serve.ts imports and uses the module-level constant (no per-call reconstruction) ✓",
+        "ReadonlySet<string> type allows runtime string checks ✓",
+        "New test verifies export and contents ✓"
+      ]
+    },
+    {
+      "id": "W7-T09",
+      "name": "Eliminate residual as any cast in serve.ts",
       "status": "completed",
       "files": ["src/serve.ts"],
       "validation": [
-        "Worker error IPC handler now calls safeReject() — settles promise before exit handler fires ✓",
-        "Exit handler's safeReject is a no-op when error already settled (via settled flag) ✓",
-        "Error message forwarded to client via ws.send before promise rejection ✓",
-        "Worker still exits non-zero on init failure (process.exit(1) unchanged in session-worker.ts) ✓"
+        "messageBuffer.push uses `frame as unknown as WsToken | WsToolUseStart` (no `as any`) ✓",
+        "WsToken and WsToolUseStart imported from types/ws.ts ✓",
+        "Frame type narrowed by the ALLOWED_FRAME_TYPES check + type guard ✓"
       ]
     },
     {
-      "id": "W6-T03",
-      "name": "QueryMutex timeout",
-      "status": "completed",
-      "files": ["src/query-mutex.ts", "src/serve.ts", "src/session-worker.test.ts"],
-      "validation": [
-        "acquire(key, timeoutMs) signature added — optional parameter, backward compatible ✓",
-        "MutexTimeoutError thrown with key and timeoutMs properties ✓",
-        "Timed-out waiter removed from queue via splice ✓",
-        "serve.ts passes 5-minute timeout to prevent permanent lockout ✓",
-        "5 new tests: timeout throws, waiter removed, no regression, success-in-time, FIFO preserved ✓",
-        "All existing mutex tests pass without modification ✓"
-      ]
-    },
-    {
-      "id": "W6-T04",
-      "name": "Token revocation safeCompare",
-      "status": "completed",
-      "files": ["src/access.ts", "src/serve.ts"],
-      "validation": [
-        "safeCompare exported from access.ts (was private function) ✓",
-        "serve.ts imports safeCompare ✓",
-        "onAccessChange uses safeCompare for tokenHash comparison ✓",
-        "3 unit tests: equal strings, different strings, different-length strings ✓"
-      ]
-    },
-    {
-      "id": "W6-T05",
-      "name": "WebSocket message schema validation",
-      "status": "completed",
-      "files": ["src/ws-protocol.ts", "src/serve.ts", "src/session-worker.test.ts"],
-      "validation": [
-        "Zod discriminated union schema for all 6 WS client message types ✓",
-        "validateWsMessage() returns discriminated { ok, message } | { ok, error } result ✓",
-        "serve.ts calls validateWsMessage after JSON.parse, rejects invalid with structured error ✓",
-        "15 unit tests: valid messages, type coercion rejects, unknown types, null/non-object, empty fields ✓"
-      ]
-    },
-    {
-      "id": "W6-T06",
-      "name": "Worker ready timeout",
-      "status": "completed",
-      "files": ["src/worker-manager.ts"],
-      "validation": [
-        "30s WORKER_READY_TIMEOUT_MS constant added ✓",
-        "InternalWorkerState gains readyTimer and ready flag ✓",
-        "Ready timer started on spawn, cleared when 'ready' IPC received ✓",
-        "Timeout kills worker via this.kill(conversationKey) ✓",
-        "Timer cleared on worker exit and kill() to prevent leaks ✓"
-      ]
-    },
-    {
-      "id": "W6-T07",
-      "name": "Pending approval cleanup on worker crash",
+      "id": "W7-T10",
+      "name": "safeSend wrapper for ws.send",
       "status": "completed",
       "files": ["src/serve.ts"],
       "validation": [
-        "workerExitHandler iterates pendingApprovals and resolves each with false (denied) ✓",
-        "Client receives tool_approval_rejected frame with reason for each pending approval ✓",
-        "pendingApprovals.clear() called after processing ✓",
-        "WS send wrapped in try/catch (connection may already be closed) ✓"
+        "safeSend(ws, data) helper: try/catch around ws.send(JSON.stringify(data)) ✓",
+        "Used in all post-processing ws.send calls in handleMessage ✓",
+        "Used in approval cleanup and error paths ✓",
+        "Used in worker frame relay, tool approval, result, status, budget frames ✓",
+        "Removed manual try/catch in approval rejection (safeSend handles it) ✓"
       ]
     },
     {
-      "id": "W6-T08",
-      "name": "Configurable maxWorkers in HarnessConfig",
+      "id": "W7-T11",
+      "name": "Minimize worker config exposure",
       "status": "completed",
-      "files": ["src/config.ts", "src/serve.ts"],
+      "files": ["src/ipc-protocol.ts", "src/serve.ts", "src/session-worker.ts"],
       "validation": [
-        "serve.maxWorkers added to HarnessConfig interface (optional number) ✓",
-        "Default remains 20 (DEFAULT_MAX_WORKERS in worker-manager.ts) ✓",
-        "WorkerManager receives opts.config.serve?.maxWorkers in serve.ts ✓",
-        "config.yaml override flows through deepMerge ✓"
+        "WorkerConfig interface defined in ipc-protocol.ts with only needed fields ✓",
+        "toWorkerConfig() helper in serve.ts extracts model, effort, tools, hooks, serve.logging ✓",
+        "No serve.rateLimits, serve.privacy, serve.maxWorkers sent to worker ✓",
+        "session-worker.ts casts WorkerConfig to HarnessConfig (structural subset) ✓"
       ]
     },
     {
-      "id": "W6-T09",
-      "name": "Worker pool size in /health/deep",
+      "id": "W7-T12",
+      "name": "WS schema tightening",
       "status": "completed",
-      "files": ["src/health.ts", "src/serve.ts", "src/worker-manager.ts"],
+      "files": ["src/ws-protocol.ts"],
       "validation": [
-        "WorkerPoolStats interface added: { active, max, utilization } ✓",
-        "DeepHealth.stats.workerPool field added ✓",
-        "HealthMonitor constructor accepts getWorkerPoolStats callback ✓",
-        "serve.ts passes lambda using workerManager.size and workerManager.capacity ✓",
-        "WorkerManager.capacity getter exposes maxWorkers ✓",
-        "utilization = active/max rounded to 3 decimal places ✓"
+        "WsMessageSchema content field has .max(200_000) ✓",
+        "WsSubscribeSchema lastMessageId has .max(Number.MAX_SAFE_INTEGER) ✓",
+        "4 new tests: content >200K rejected, 200K accepted, agentId >200 rejected, negative lastMessageId rejected ✓"
+      ]
+    },
+    {
+      "id": "W7-T13",
+      "name": "safeCompare length-safety JSDoc",
+      "status": "completed",
+      "files": ["src/access.ts"],
+      "validation": [
+        "JSDoc documents that timingSafeEqual is only constant-time for equal-length inputs ✓",
+        "Notes all current callers use fixed-length SHA-256 hex (64 chars) ✓",
+        "Warns about timing leak if used with variable-length inputs ✓",
+        "3 new tests: equal hex, different hex (same length), different length ✓"
+      ]
+    },
+    {
+      "id": "W7-T14",
+      "name": "Bounded health arrays",
+      "status": "completed",
+      "files": ["src/health.ts"],
+      "validation": [
+        "maybePrune() called on every recordError/recordSuccess ✓",
+        "Prunes entries older than 1 hour every 1000 insertions ✓",
+        "insertionCount resets after each prune cycle ✓",
+        "No memory growth under sustained load without deep health calls ✓",
+        "New test: 1001 insertions triggers prune without crash ✓"
+      ]
+    },
+    {
+      "id": "W7-T15",
+      "name": "WorkerManager.getStats() method",
+      "status": "completed",
+      "files": ["src/worker-manager.ts", "src/health.ts", "src/serve.ts"],
+      "validation": [
+        "getStats() returns { active, max, utilization } ✓",
+        "Utilization rounded to 3 decimal places ✓",
+        "serve.ts health monitor lambda simplified to () => workerManager.getStats() ✓",
+        "New test: getStats returns correct WorkerPoolStats structure ✓"
+      ]
+    },
+    {
+      "id": "W7-T16",
+      "name": "Wave 6 test coverage gaps",
+      "status": "completed",
+      "files": ["src/session-worker.test.ts"],
+      "validation": [
+        "maxWorkers edge values: 0 → default(20), -1 → 1, NaN → default(20), '5' → 5 ✓",
+        "WS schema: agentId >200 chars rejected, negative lastMessageId rejected ✓",
+        "WS schema: content >200K rejected, 200K accepted ✓",
+        "All 282 tests pass (93 in session-worker.test.ts) ✓"
+      ]
+    },
+    {
+      "id": "W7-T17",
+      "name": "CLI credentials check command",
+      "status": "completed",
+      "files": ["src/index.tsx"],
+      "validation": [
+        "`credentials check --agent <name>` reports legacy vs strict mode ✓",
+        "Shows granted/missing keys per grant with tool domains ✓",
+        "Works with default agent if --agent not specified ✓"
+      ]
+    },
+    {
+      "id": "W7-T18",
+      "name": "CLI access create command",
+      "status": "completed",
+      "files": ["src/index.tsx"],
+      "validation": [
+        "`access create --name <name> --agents <list>` generates token ✓",
+        "Appends entry to access.yaml (creates file if missing) ✓",
+        "Raw token shown once; only hash persisted ✓"
+      ]
+    },
+    {
+      "id": "W7-T19",
+      "name": "CLI status command",
+      "status": "completed",
+      "files": ["src/index.tsx"],
+      "validation": [
+        "`status <agent>` reads runs.jsonl and shows last 10 runs ✓",
+        "Displays timestamp, exit code, duration, prompt snippet ✓",
+        "Gracefully handles missing runs file ✓"
+      ]
+    },
+    {
+      "id": "W7-T20",
+      "name": "CLI preflight command",
+      "status": "completed",
+      "files": ["src/index.tsx"],
+      "validation": [
+        "`preflight --agent <name>` validates agent exists, IDENTITY.md parses ✓",
+        "Checks credentials grants for missing keys ✓",
+        "Checks sandbox/egress config ✓",
+        "Checks ANTHROPIC_API_KEY presence ✓",
+        "Exit code 0 on all-pass, 1 on any failure ✓"
+      ]
+    },
+    {
+      "id": "W7-T21",
+      "name": "Token rotation mechanism",
+      "status": "completed",
+      "files": ["src/index.tsx"],
+      "validation": [
+        "`access rotate --name <name>` generates new token for existing user ✓",
+        "Updates token_hash in access.yaml ✓",
+        "Shows old hash prefix and new raw token ✓",
+        "Active sessions with old token rejected on next request (existing auth flow) ✓"
       ]
     }
   ]

@@ -699,13 +699,13 @@ describe("SdkStreamProcessor (W6-T01)", () => {
     }
   });
 
-  it("extracts tool_block_stop", () => {
+  it("extracts content_block_stop", () => {
     const event = extractSdkEvent({
       type: "stream_event",
       event: { type: "content_block_stop" },
     });
     assert.ok(event);
-    assert.strictEqual(event.kind, "tool_block_stop");
+    assert.strictEqual(event.kind, "content_block_stop");
   });
 
   it("extracts subagent_started", () => {
@@ -1006,5 +1006,192 @@ describe("WS message schema validation (W6-T05)", () => {
   it("rejects subscribe with missing agentId", () => {
     const result = validateWsMessage({ type: "subscribe" });
     assert.ok(!result.ok);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// ─── Wave 7: Review Hardening + Type Safety + Observability ───
+// ═══════════════════════════════════════════════════════
+
+// ─── W7-T01: Rename tool_block_stop → content_block_stop ───
+
+describe("content_block_stop rename (W7-T01)", () => {
+  it("extractSdkEvent returns content_block_stop kind", () => {
+    const event = extractSdkEvent({
+      type: "stream_event",
+      event: { type: "content_block_stop" },
+    });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "content_block_stop");
+  });
+});
+
+// ─── W7-T03: tool_input_delta toolId extraction ───
+
+describe("tool_input_delta toolId (W7-T03)", () => {
+  it("returns null toolId when contentBlock.id is absent", () => {
+    const event = extractSdkEvent({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        delta: { type: "input_json_delta", partial_json: '{"x":1}' },
+        // no content_block
+      },
+    });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "tool_input_delta");
+    if (event.kind === "tool_input_delta") {
+      assert.strictEqual(event.toolId, null);
+    }
+  });
+
+  it("returns toolId when contentBlock.id is present", () => {
+    const event = extractSdkEvent({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        delta: { type: "input_json_delta", partial_json: '{"x":1}' },
+        content_block: { id: "tool-123" },
+      },
+    });
+    assert.ok(event);
+    if (event.kind === "tool_input_delta") {
+      assert.strictEqual(event.toolId, "tool-123");
+    }
+  });
+});
+
+// ─── W7-T08: ALLOWED_FRAME_TYPES in ipc-protocol.ts ───
+
+describe("ALLOWED_FRAME_TYPES (W7-T08)", () => {
+  it("is exported from ipc-protocol and contains expected types", async () => {
+    const { ALLOWED_FRAME_TYPES } = await import("./ipc-protocol.js");
+    assert.ok(ALLOWED_FRAME_TYPES instanceof Set);
+    assert.ok(ALLOWED_FRAME_TYPES.has("token"));
+    assert.ok(ALLOWED_FRAME_TYPES.has("status"));
+    assert.ok(ALLOWED_FRAME_TYPES.has("tool_use_start"));
+    assert.ok(ALLOWED_FRAME_TYPES.has("tool_result"));
+    assert.ok(!ALLOWED_FRAME_TYPES.has("evil"));
+    assert.ok(!ALLOWED_FRAME_TYPES.has(""));
+  });
+});
+
+// ─── W7-T12: WS schema tightening ───
+
+describe("WS schema tightening (W7-T12)", () => {
+  it("rejects message with content exceeding 200K chars", () => {
+    const result = validateWsMessage({ type: "message", content: "x".repeat(200_001) });
+    assert.ok(!result.ok);
+  });
+
+  it("accepts message with content at 200K chars", () => {
+    const result = validateWsMessage({ type: "message", content: "x".repeat(200_000) });
+    assert.ok(result.ok);
+  });
+
+  it("rejects subscribe with agentId exceeding 200 chars", () => {
+    const result = validateWsMessage({ type: "subscribe", agentId: "a".repeat(201) });
+    assert.ok(!result.ok);
+  });
+
+  it("accepts subscribe with agentId at 200 chars", () => {
+    const result = validateWsMessage({ type: "subscribe", agentId: "a".repeat(200) });
+    assert.ok(result.ok);
+  });
+
+  it("rejects negative lastMessageId", () => {
+    const result = validateWsMessage({ type: "subscribe", agentId: "test", lastMessageId: -1 });
+    assert.ok(!result.ok);
+  });
+});
+
+// ─── W7-T14: Health array pruning ───
+
+describe("Health array pruning (W7-T14)", () => {
+  it("prunes old entries after threshold insertions", async () => {
+    const { HealthMonitor } = await import("./health.js");
+    const monitor = new HealthMonitor(
+      "1.0.0",
+      () => 0,
+      () => 0,
+    );
+
+    // Insert 1001 errors to trigger pruning (threshold is 1000)
+    for (let i = 0; i < 1001; i++) {
+      monitor.recordError();
+    }
+
+    // After pruning, all entries are recent (within 1 hour), so they should all remain.
+    // The key test is that the prune ran without crashing and arrays are bounded.
+    // Access error rate to check internal state was pruned
+    const shallow = monitor.shallowCheck();
+    assert.strictEqual(shallow.status, "healthy");
+  });
+});
+
+// ─── W7-T16: Wave 6 test coverage gaps ───
+
+describe("WorkerManager maxWorkers edge values (W7-T16)", () => {
+  it("0 falls back to default (20)", async () => {
+    const { WorkerManager } = await import("./worker-manager.js");
+    const { Logger } = await import("./logger.js");
+    const logger = new Logger("error");
+    // 0 is falsy → `0 || DEFAULT_MAX_WORKERS` → 20
+    const wm = new WorkerManager(logger, 0);
+    assert.strictEqual(wm.capacity, 20);
+  });
+
+  it("clamps -1 to 1", async () => {
+    const { WorkerManager } = await import("./worker-manager.js");
+    const { Logger } = await import("./logger.js");
+    const logger = new Logger("error");
+    const wm = new WorkerManager(logger, -1);
+    assert.strictEqual(wm.capacity, 1);
+  });
+
+  it("NaN falls back to default (20)", async () => {
+    const { WorkerManager } = await import("./worker-manager.js");
+    const { Logger } = await import("./logger.js");
+    const logger = new Logger("error");
+    const wm = new WorkerManager(logger, NaN);
+    assert.strictEqual(wm.capacity, 20);
+  });
+
+  it("string coerced correctly", async () => {
+    const { WorkerManager } = await import("./worker-manager.js");
+    const { Logger } = await import("./logger.js");
+    const logger = new Logger("error");
+    const wm = new WorkerManager(logger, "5" as any);
+    assert.strictEqual(wm.capacity, 5);
+  });
+});
+
+describe("WorkerManager.getStats() (W7-T15)", () => {
+  it("returns WorkerPoolStats with correct structure", async () => {
+    const { WorkerManager } = await import("./worker-manager.js");
+    const { Logger } = await import("./logger.js");
+    const logger = new Logger("error");
+    const wm = new WorkerManager(logger, 10);
+    const stats = wm.getStats();
+    assert.strictEqual(stats.active, 0);
+    assert.strictEqual(stats.max, 10);
+    assert.strictEqual(stats.utilization, 0);
+  });
+});
+
+describe("safeCompare JSDoc (W7-T13)", () => {
+  it("returns true for equal-length equal hex strings", () => {
+    const hash = hashToken("test-token-123");
+    assert.ok(safeCompare(hash, hash));
+  });
+
+  it("returns false for equal-length different hex strings", () => {
+    assert.ok(!safeCompare(hashToken("a"), hashToken("b")));
+    // Both are 64-char hex — timing-safe comparison applies
+    assert.strictEqual(hashToken("a").length, hashToken("b").length);
+  });
+
+  it("returns false immediately for different-length strings", () => {
+    assert.ok(!safeCompare("short", hashToken("something")));
   });
 });

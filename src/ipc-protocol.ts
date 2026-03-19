@@ -9,11 +9,43 @@
 
 // ─── Parent → Worker messages ───
 
+/**
+ * W7-T11: Worker config subset — only what the worker needs.
+ * Full HarnessConfig contains serve.rateLimits, serve.privacy, etc.
+ * which are irrelevant inside a worker and increase information exposure.
+ */
+export interface WorkerConfig {
+  model: string;
+  effort: "low" | "medium" | "high" | "max";
+  tools: {
+    memory: { enabled: boolean };
+    workspace: { enabled: boolean };
+    web: { enabled: boolean; extraction_model?: string };
+    shell: { enabled: boolean };
+    tasks: { enabled: boolean };
+    introspection: { enabled: boolean };
+    models: { enabled: boolean };
+    scratchpad: { enabled: boolean };
+    a2a: { enabled: boolean; agents: Record<string, { url: string; description: string }> };
+  };
+  hooks: {
+    logToolUse: boolean;
+    verifyBeforeComplete: boolean;
+    loopDetection: boolean;
+    loopDetectionThreshold: number;
+    compactSuccessOutput: boolean;
+    compactOutputThreshold: number;
+  };
+  serve?: {
+    logging?: { level?: "debug" | "info" | "warn" | "error" };
+  };
+}
+
 export interface IpcInitMessage {
   type: "init";
   agentId: string;
   userId: string;
-  /** Serialized HarnessConfig (JSON string — HarnessConfig is a plain object) */
+  /** Serialized WorkerConfig (JSON string — only the subset the worker needs) */
   configJson: string;
   /** Subset of AccessUser needed by the worker */
   accessUser: { name: string; toolsDeny: string[] };
@@ -103,6 +135,23 @@ export type WorkerToParentMessage =
   | IpcToolApprovalRequest
   | IpcResultMessage
   | IpcErrorMessage;
+
+// ─── Allowed frame types (W7-T08) ───
+//
+// Module-level constant co-located with the frame type definitions.
+// Auditable list of frame types that a worker process may relay to a WebSocket client.
+// Any frame with a `type` not in this set is rejected by serve.ts.
+export const ALLOWED_FRAME_TYPES: ReadonlySet<string> = new Set([
+  "status",
+  "token",
+  "thinking_token",
+  "tool_use_start",
+  "tool_use_input",
+  "tool_result",
+  "subagent_started",
+  "subagent_progress",
+  "subagent_done",
+]);
 
 // ─── Type guards ───
 

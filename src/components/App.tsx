@@ -491,7 +491,7 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
               }
               break;
 
-            case "tool_block_stop":
+            case "content_block_stop":
               if (inToolUseRef.current) {
                 inToolUseRef.current = false;
                 try {
@@ -556,6 +556,13 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
             case "result":
               wasInterrupted = event.isInterrupted;
               break;
+
+            default: {
+              // W7-T07: Exhaustive check — adding a new SdkEvent kind without handling it
+              // causes a compile error.
+              const _exhaustive: never = event;
+              void _exhaustive;
+            }
           }
         }
 

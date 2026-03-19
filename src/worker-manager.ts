@@ -13,6 +13,7 @@ import { type ChildProcess, fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadAgentEnv } from "./env.js";
 import { buildShellEnv } from "./env-safety.js";
+import type { WorkerPoolStats } from "./health.js";
 import type { IpcInitMessage, ParentToWorkerMessage, WorkerToParentMessage } from "./ipc-protocol.js";
 import type { Logger } from "./logger.js";
 
@@ -265,6 +266,21 @@ export class WorkerManager {
   /** Maximum number of workers (W6-T09 — for health reporting). */
   get capacity(): number {
     return this.maxWorkers;
+  }
+
+  /**
+   * W7-T15: Return worker pool stats for health reporting.
+   * Localizes the utilization computation inside WorkerManager
+   * instead of spreading it across serve.ts lambdas.
+   */
+  getStats(): WorkerPoolStats {
+    const active = this.workers.size;
+    const max = this.maxWorkers;
+    return {
+      active,
+      max,
+      utilization: max > 0 ? Math.round((active / max) * 1000) / 1000 : 0,
+    };
   }
 
   private resetIdleTimer(state: InternalWorkerState): void {

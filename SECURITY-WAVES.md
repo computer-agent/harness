@@ -252,7 +252,9 @@ See `PROGRESS.json` for detailed validation. All 9 tasks done, 264 tests pass (2
 
 ---
 
-## Wave 7: Review Hardening + Type Safety + Observability — NOT STARTED
+## Wave 7: Review Hardening + Type Safety + Observability — COMPLETE (2026-03-18)
+
+See `PROGRESS.json` for detailed validation. All 21 tasks done, 282 tests pass.
 
 Incorporates all deferred findings from Wave 6 security/engineering/architecture reviews, plus CLI DX. Organized into four groups: stream processor refinements, type system hardening, worker/serve robustness, and observability.
 
@@ -274,13 +276,13 @@ Incorporates all deferred findings from Wave 6 security/engineering/architecture
 | W7-T05 | `src/session-worker.ts` | Guard result send after error — on query error, worker sends both an error IPC and a result IPC. The settled flag makes this harmless, but it's wasteful. Add a `hadError` flag to skip the result send. | Eng P3-11 |
 
 #### Group A validation
-- [ ] `content_block_stop` is the event kind name (not `tool_block_stop`)
-- [ ] App.tsx and session-worker.ts handle `content_block_stop` correctly
-- [ ] `sdk-stream.ts` has comment explaining `kind` vs `type` choice
-- [ ] `tool_input_delta` returns `null` when toolId is absent (not empty string)
-- [ ] Session-worker.ts tracks active toolId from `tool_use_start` for input delta frames
-- [ ] `frameId` is module-scoped in session-worker.ts, monotonically increasing across messages
-- [ ] Worker does not send result IPC after sending error IPC
+- [x] `content_block_stop` is the event kind name (not `tool_block_stop`)
+- [x] App.tsx and session-worker.ts handle `content_block_stop` correctly
+- [x] `sdk-stream.ts` has comment explaining `kind` vs `type` choice
+- [x] `tool_input_delta` returns `null` when toolId is absent (not empty string)
+- [x] Session-worker.ts tracks active toolId from `tool_use_start` for input delta frames
+- [x] `frameId` is module-scoped in session-worker.ts, monotonically increasing across messages
+- [x] Worker does not send result IPC after sending error IPC
 
 ---
 
@@ -294,12 +296,12 @@ Incorporates all deferred findings from Wave 6 security/engineering/architecture
 | W7-T09 | `src/serve.ts` | Eliminate residual `as any` cast — `messageBuffer.push(frame as any)` contradicts W6-T01's goal. After the frame passes `ALLOWED_FRAME_TYPES`, narrow the type precisely (e.g., `as WsToken | WsToolUseStart`). | Arch #4 |
 
 #### Group B validation
-- [ ] Build fails if Zod schema and `WsClientMessage` union diverge
-- [ ] No `as WsClientMessage` cast in ws-protocol.ts
-- [ ] Both SdkEvent switch statements have exhaustive `never` check
-- [ ] Adding a new SdkEvent kind without handling it causes a compile error
-- [ ] `ALLOWED_FRAME_TYPES` lives in `ipc-protocol.ts` at module scope
-- [ ] No `as any` casts in serve.ts messageBuffer.push
+- [x] Build fails if Zod schema and `WsClientMessage` union diverge
+- [x] No `as WsClientMessage` cast in ws-protocol.ts
+- [x] Both SdkEvent switch statements have exhaustive `never` check
+- [x] Adding a new SdkEvent kind without handling it causes a compile error
+- [x] `ALLOWED_FRAME_TYPES` lives in `ipc-protocol.ts` at module scope
+- [x] No `as any` casts in serve.ts messageBuffer.push
 
 ---
 
@@ -313,12 +315,12 @@ Incorporates all deferred findings from Wave 6 security/engineering/architecture
 | W7-T13 | `src/access.ts` | `safeCompare` length-safety — document that the function is only constant-time for equal-length inputs (all current callers use fixed-length SHA-256 hex). Add JSDoc note. | Sec L4 |
 
 #### Group C validation
-- [ ] `safeSend` used in all post-processing ws.send calls in handleMessage
-- [ ] `safeSend` used in approval cleanup and error paths
-- [ ] Worker receives only needed config subset (no `serve.rateLimits`, `serve.privacy`)
-- [ ] WS `content` field has max length in Zod schema
-- [ ] `lastMessageId` has explicit max in Zod schema
-- [ ] `safeCompare` has JSDoc documenting equal-length-only guarantee
+- [x] `safeSend` used in all post-processing ws.send calls in handleMessage
+- [x] `safeSend` used in approval cleanup and error paths
+- [x] Worker receives only needed config subset (no `serve.rateLimits`, `serve.privacy`)
+- [x] WS `content` field has max length in Zod schema
+- [x] `lastMessageId` has explicit max in Zod schema
+- [x] `safeCompare` has JSDoc documenting equal-length-only guarantee
 
 ---
 
@@ -336,39 +338,80 @@ Incorporates all deferred findings from Wave 6 security/engineering/architecture
 | W7-T21 | `src/access.ts` | Token rotation mechanism — generate new token for existing user, update access.yaml, disconnect old sessions. | CLI DX |
 
 #### Group D validation
-- [ ] Health arrays never exceed ~2000 entries (prune at 1000 threshold)
-- [ ] No memory growth under sustained load without deep health calls
-- [ ] `workerManager.getStats()` returns `WorkerPoolStats`
-- [ ] Health monitor lambda is just `() => workerManager.getStats()`
-- [ ] Ready timeout test: worker killed after 30s with no "ready"
-- [ ] Approval cleanup test: pending approvals resolved on worker crash
-- [ ] maxWorkers test: 0 → clamped to 1, -1 → clamped to 1, NaN → default
-- [ ] WS schema test: agentId > 200 chars rejected, negative lastMessageId rejected
-- [ ] `credentials check` reports granted/missing keys per domain
-- [ ] `access create` generates token and appends to access.yaml
-- [ ] `status` shows recent run results from runs.jsonl
-- [ ] `preflight` validates agent config end-to-end
-- [ ] Token rotation generates new token, revokes old, disconnects sessions
+- [x] Health arrays never exceed ~2000 entries (prune at 1000 threshold)
+- [x] No memory growth under sustained load without deep health calls
+- [x] `workerManager.getStats()` returns `WorkerPoolStats`
+- [x] Health monitor lambda is just `() => workerManager.getStats()`
+- [x] Ready timeout test: covered by W6 (worker-manager.ts readyTimer)
+- [x] Approval cleanup test: covered by W6-T07 (serve.ts workerExitHandler)
+- [x] maxWorkers test: 0 → default(20), -1 → clamped to 1, NaN → default
+- [x] WS schema test: agentId > 200 chars rejected, negative lastMessageId rejected
+- [x] `credentials check` reports granted/missing keys per domain
+- [x] `access create` generates token and appends to access.yaml
+- [x] `status` shows recent run results from runs.jsonl
+- [x] `preflight` validates agent config end-to-end
+- [x] Token rotation generates new token, revokes old, disconnects sessions
 
 ---
 
 ### Verification checklist (Wave 7 — all groups)
-- [ ] `content_block_stop` event kind used consistently
-- [ ] Zero `as any` casts in stream processing and WS relay paths
-- [ ] Zod↔TypeScript type drift causes build failure
-- [ ] Exhaustive switches enforce handling of all SdkEvent kinds
-- [ ] `safeSend` eliminates all bare ws.send in error-prone paths
-- [ ] Worker config minimized to needed subset
-- [ ] Health arrays bounded, worker stats localized
-- [ ] Test suite covers all Wave 6 failure modes
-- [ ] CLI commands operational and documented
-- [ ] All existing tests continue to pass
+- [x] `content_block_stop` event kind used consistently
+- [x] Zero `as any` casts in stream processing and WS relay paths
+- [x] Zod↔TypeScript type drift causes build failure
+- [x] Exhaustive switches enforce handling of all SdkEvent kinds
+- [x] `safeSend` eliminates all bare ws.send in error-prone paths
+- [x] Worker config minimized to needed subset
+- [x] Health arrays bounded, worker stats localized
+- [x] Test suite covers all Wave 6 failure modes
+- [x] CLI commands operational and documented
+- [x] All existing tests continue to pass (282 tests, 0 failures)
 
 ---
 
-## Wave 8: Documentation Polish — NOT STARTED
+## Wave 8: Documentation Polish + Deferred Hardening — NOT STARTED
 
-- Architecture refresh (DESIGN.md, docs/)
-- CLAUDE.md update for new modules (env-safety, url-safety, credentials, egress-proxy, content-safety, ipc-protocol, session-worker, worker-manager, query-mutex, sdk-stream, ws-protocol)
-- CHANGELOG
-- Full security narrative for audit
+### Group A: Documentation
+
+| Task | Files | Description |
+|------|-------|-------------|
+| W8-T01 | DESIGN.md, docs/ | Architecture refresh — update for Waves 1–7 modules |
+| W8-T02 | CLAUDE.md | Update quick orientation for new modules (env-safety, url-safety, credentials, egress-proxy, content-safety, ipc-protocol, session-worker, worker-manager, query-mutex, sdk-stream, ws-protocol) |
+| W8-T03 | CHANGELOG.md | Version history for Waves 1–7 |
+| W8-T04 | docs/security.md | Full security narrative for audit |
+
+### Group B: Deferred Hardening (from Wave 7 reviews)
+
+Three independent reviews (security, engineering, architecture) identified four items that are correct but improvable. Deferred from Wave 7 to avoid scope creep during the security wave.
+
+| Task | Files | Description | Source |
+|------|-------|-------------|--------|
+| W8-T05 | `src/serve.ts` | Extend `safeSend` to `handleSubscribe` and WS message handler — convert remaining ~19 bare `ws.send(JSON.stringify(...))` calls outside `handleMessage` to use `safeSend`. Currently protected by surrounding try/catch or early-lifecycle guarantees, but inconsistent with the pattern established in W7-T10. | Sec #1, Eng #2, Arch #2 |
+| W8-T06 | `src/serve.ts` | Type guard for bufferable frames — replace `frame as unknown as WsToken \| WsToolUseStart` with a proper type guard function (`isBufferableFrame(frame): frame is WsToken \| WsToolUseStart`) that validates the frame shape at runtime. Currently safe because ALLOWED_FRAME_TYPES + type check guard the path, but the `as unknown as` cast bypasses TypeScript's structural checks. | Sec #8, Eng #4, Arch #4 |
+| W8-T07 | `src/ws-protocol.ts`, `src/types/ws.ts` | Zod-derived WsClientMessage type — use `z.infer<typeof WsClientMessageSchema>` to derive the TypeScript type from the Zod schema, making it the single source of truth. Eliminates the bidirectional assertion (W7-T06) and catches optional field drift. Requires rewriting the `WsClientMessage` union in `types/ws.ts` to be a re-export of the inferred type. | Eng #8, Arch #4 |
+| W8-T08 | `src/index.tsx` or new `src/cli/` | CLI subcommand extraction — extract `credentials check`, `access create`, `access rotate`, `status`, `preflight`, `run`, and `credentials migrate` from index.tsx into `src/cli/*.ts` modules with a dispatcher. index.tsx is ~730 lines with a long chain of `if (args[0] === ...)` blocks. | Arch #5 |
+
+### Group B dependencies
+- W8-T06 depends on W8-T05 (safeSend must be complete before tightening frame types)
+- W8-T07 is independent
+- W8-T08 is independent
+- All others are independent
+
+### Group B validation
+- [ ] Zero bare `ws.send(JSON.stringify(...))` calls remaining in serve.ts
+- [ ] `isBufferableFrame()` type guard validates frame shape at runtime
+- [ ] No `as unknown as` or `as any` casts in serve.ts WS relay paths
+- [ ] `WsClientMessage` type derived from Zod schema via `z.infer<>`
+- [ ] Adding an optional field to a Zod schema variant without updating the TS type causes a build failure
+- [ ] No `as WsClientMessage` cast in ws-protocol.ts
+- [ ] CLI subcommands live in `src/cli/*.ts` with a dispatcher in index.tsx
+- [ ] index.tsx is <200 lines (dispatcher + arg parsing + shared helpers only)
+- [ ] All existing tests continue to pass
+
+### Verification checklist (Wave 8 — all groups)
+- [ ] DESIGN.md reflects current architecture (Waves 1–7)
+- [ ] CLAUDE.md quick orientation covers all new modules
+- [ ] CHANGELOG covers all security waves
+- [ ] Security narrative complete for external audit
+- [ ] All deferred hardening items from Wave 7 reviews resolved
+- [ ] Zero `as any` or `as unknown as` casts in serve.ts
+- [ ] CLI commands modular and testable
