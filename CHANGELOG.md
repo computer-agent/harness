@@ -2,6 +2,17 @@
 
 All notable changes to the mastersof-ai harness.
 
+## 2026-03-19
+
+### Wave 5.1: Validation Sprint + Test Strengthening
+
+- 49 new integration tests for IPC round-trip, worker lifecycle, frame sanitization, mutex contention, and env isolation
+- Mock worker (`src/test-fixtures/mock-worker.ts`) speaks IPC protocol without SDK dependency
+- Extracted `filterExecArgv()` and `buildWorkerEnv()` from worker-manager.ts so tests call production code instead of reimplementing logic inline
+- Added `workerPath` constructor param for test injection
+- Rewrote 5 tautological tests in session-worker; added 2 integration tests (SIGKILL+mutex, kill-on-resubscribe)
+- 332 total tests, 0 failures, 5/5 flakiness runs clean
+
 ## 2026-03-18
 
 ### Security Hardening Waves 1–7
