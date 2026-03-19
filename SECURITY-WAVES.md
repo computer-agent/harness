@@ -97,20 +97,19 @@ sandbox:
 
 ---
 
-## Wave 3: Billing Agent Production Deploy — NOT STARTED
+## Wave 3: Agent Production Deploy — OUT OF SCOPE (private ops)
 
-Depends on Wave 2. ~1 week. Mostly ops/config, not code.
+Wave 3 is **not a code wave** — it's deploying a specific agent instance on private
+infrastructure. No changes to the open source harness are needed. The security waves
+(1–2, 4–8) built the generic runtime; Wave 3 exercises it for a private use case.
 
-| Task | Description |
-|------|-------------|
-| W3-T01 | Configure billing agent IDENTITY.md (shell disabled, egress allowlisted, credentials granted, A2A excluded) |
-| W3-T02 | Set up Tailscale (join tailnet, tag server, configure ACLs) |
-| W3-T03 | Serve mode with `--host 0.0.0.0` behind Tailscale |
-| W3-T04 | Test billing e2e: query Braintree → generate invoice → send test email |
-| W3-T05 | Set up cron: `mastersof-ai run billing "Run monthly billing"` |
-| W3-T06 | Validate credential isolation |
-| W3-T07 | Validate egress control |
-| W3-T08 | Docs: deployment guide (Tailscale setup, cron) |
+Tasks (all private ops, not repo changes):
+- Configure agent IDENTITY.md (shell disabled, egress allowlisted, credentials granted)
+- Set up Tailscale networking (join tailnet, tag server, configure ACLs)
+- Serve mode behind Tailscale
+- E2e validation of credential isolation and egress control
+- Cron setup for headless runs
+- Deployment guide (private docs)
 
 ---
 
