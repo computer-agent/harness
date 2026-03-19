@@ -185,6 +185,12 @@ export interface WsConsentRequired {
   policyVersion: string;
 }
 
+export interface WsToolApprovalRejected {
+  type: "tool_approval_rejected";
+  toolId: string;
+  reason: string;
+}
+
 export interface WsRosterUpdated {
   type: "roster_updated";
   agents: Array<{
@@ -218,4 +224,5 @@ export type WsServerMessage =
   | WsBudgetWarning
   | WsBudgetExceeded
   | WsConsentRequired
-  | WsRosterUpdated;
+  | WsRosterUpdated
+  | WsToolApprovalRejected;

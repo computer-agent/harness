@@ -24,6 +24,12 @@ export interface ShallowHealth {
   };
 }
 
+export interface WorkerPoolStats {
+  active: number;
+  max: number;
+  utilization: number; // 0.0–1.0
+}
+
 export interface DeepHealth {
   status: "healthy" | "degraded" | "unhealthy";
   checks: {
@@ -35,6 +41,7 @@ export interface DeepHealth {
     activeConnections: number;
     errorRate1h: number;
     memory: { heapUsedMB: number; heapTotalMB: number; rssMB: number };
+    workerPool: WorkerPoolStats; // W6-T09
   };
 }
 
@@ -51,6 +58,7 @@ export class HealthMonitor {
     private readonly getActiveSessions: () => number,
     private readonly getActiveConnections: () => number,
     private readonly logger?: Logger,
+    private readonly getWorkerPoolStats?: () => WorkerPoolStats,
   ) {}
 
   setShuttingDown(): void {
@@ -107,6 +115,9 @@ export class HealthMonitor {
           ? "degraded"
           : "healthy";
 
+    // W6-T09: Worker pool utilization
+    const workerPool = this.getWorkerPoolStats ? this.getWorkerPoolStats() : { active: 0, max: 0, utilization: 0 };
+
     const result: DeepHealth = {
       status: overallStatus,
       checks: {
@@ -122,6 +133,7 @@ export class HealthMonitor {
           heapTotalMB: Math.round(mem.heapTotal / 1024 / 1024),
           rssMB: Math.round(mem.rss / 1024 / 1024),
         },
+        workerPool,
       },
     };
 

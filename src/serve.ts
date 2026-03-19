@@ -13,6 +13,7 @@ import {
   hashToken,
   loadAccessConfig,
   lookupUser,
+  safeCompare,
   userCanAccessAgent,
 } from "./access.js";
 import { type AgentContext, getAgentsDir, listAgents, resolveAgent, resolveRemoteAgent } from "./agent-context.js";
@@ -35,7 +36,7 @@ import {
   recordConsent,
   runRetentionCleanup,
 } from "./privacy.js";
-import { QueryMutex } from "./query-mutex.js";
+import { MutexTimeoutError, QueryMutex } from "./query-mutex.js";
 import { RateLimiter } from "./rate-limit.js";
 import {
   createSessionMeta,
@@ -45,10 +46,11 @@ import {
   saveSession,
   touchSession,
 } from "./sessions.js";
-import type { WsAssistantMessage, WsClientMessage } from "./types/ws.js";
+import type { WsAssistantMessage } from "./types/ws.js";
 import { UsageTracker } from "./usage.js";
 import { FileWatcher } from "./watcher.js";
 import { WorkerManager } from "./worker-manager.js";
+import { validateWsMessage } from "./ws-protocol.js";
 
 const PKG_VERSION = (() => {
   try {
@@ -515,8 +517,9 @@ async function handleMessage(
   const { agentContext, user, workerKey } = conversation;
 
   // W5-T06: Per-user concurrent query mutex — prevents two messages from running simultaneously
+  // W6-T03: 5-minute timeout prevents permanent lockout from stuck workers
   const mutexKey = `${conversation.agentId}:${user.name}`;
-  const release = await queryMutex.acquire(mutexKey);
+  const release = await queryMutex.acquire(mutexKey, 5 * 60 * 1000);
 
   try {
     ws.send(JSON.stringify({ type: "status", status: "thinking" }));
@@ -633,6 +636,8 @@ async function handleMessage(
               break;
 
             case "error":
+              // W6-T02: Worker errors (especially init_failed) must settle the promise
+              // so the exit handler's safeReject is a no-op — prevents double error to client.
               ws.send(
                 JSON.stringify({
                   type: "error",
@@ -640,6 +645,7 @@ async function handleMessage(
                   message: workerMsg.message,
                 }),
               );
+              safeReject(new Error(`Worker error [${workerMsg.code}]: ${workerMsg.message}`));
               break;
           }
         } catch (err) {
@@ -666,6 +672,25 @@ async function handleMessage(
       };
 
       const workerExitHandler = (code: number | null, signal: string | null) => {
+        // W6-T07: Clear pending approvals on worker crash — reject each with a denial
+        // so the client doesn't show stale approval prompts.
+        if (conversation.pendingApprovals.size > 0) {
+          for (const [toolId, resolver] of conversation.pendingApprovals) {
+            resolver(false); // deny
+            try {
+              ws.send(
+                JSON.stringify({
+                  type: "tool_approval_rejected",
+                  toolId,
+                  reason: "Worker process exited",
+                }),
+              );
+            } catch {
+              // WS may already be closed
+            }
+          }
+          conversation.pendingApprovals.clear();
+        }
         safeReject(new Error(`Worker exited: code=${code} signal=${signal}`));
       };
 
@@ -783,14 +808,25 @@ async function handleMessage(
         // Best effort
       }
     }
-    const classified = classifyError(err);
-    ws.send(
-      JSON.stringify({
-        type: "error",
-        code: classified.category,
-        message: classified.message,
-      }),
-    );
+    // W6: MutexTimeoutError → specific "busy" code so client can retry
+    if (err instanceof MutexTimeoutError) {
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          code: "busy",
+          message: "Agent is busy processing another request. Please try again.",
+        }),
+      );
+    } else {
+      const classified = classifyError(err);
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          code: classified.category,
+          message: classified.message,
+        }),
+      );
+    }
   } finally {
     release();
   }
@@ -898,13 +934,24 @@ function registerWebSocketRoute(
           return;
         }
 
-        let msg: WsClientMessage;
+        let parsed: unknown;
         try {
-          msg = JSON.parse(raw.toString());
+          parsed = JSON.parse(raw.toString());
         } catch {
           ws.send(JSON.stringify({ type: "error", code: "parse_error", message: "Invalid JSON" }));
           return;
         }
+
+        // W6-T05: Validate WS message against Zod schema before processing
+        const validated = validateWsMessage(parsed);
+        if (!validated.ok) {
+          logger.warn("session", "ws.invalid_message", validated.detail, {
+            details: { connectionId, userId: user.name },
+          });
+          ws.send(JSON.stringify({ type: "error", code: "invalid_message", message: validated.error }));
+          return;
+        }
+        const msg = validated.message;
 
         try {
           switch (msg.type) {
@@ -1097,12 +1144,24 @@ export async function startServer(opts: ServeOptions): Promise<void> {
     },
   });
 
+  // W5-T02/T03: Worker manager for process-isolated sessions
+  // W6-T08: configurable maxWorkers from config.yaml (default 20)
+  const workerManager = new WorkerManager(logger, opts.config.serve?.maxWorkers);
+  const queryMutex = new QueryMutex();
+
   // Health monitoring
+  // W6-T09: includes worker pool stats
   const healthMonitor = new HealthMonitor(
     PKG_VERSION,
     () => activeSessionCount,
     () => activeConnectionCount,
     logger,
+    () => ({
+      active: workerManager.size,
+      max: workerManager.capacity,
+      utilization:
+        workerManager.capacity > 0 ? Math.round((workerManager.size / workerManager.capacity) * 1000) / 1000 : 0,
+    }),
   );
 
   // Track error/success rates via Fastify response hook
@@ -1121,10 +1180,6 @@ export async function startServer(opts: ServeOptions): Promise<void> {
   registerUsageRoutes(app, opts, usageTracker, costTracker);
   registerAdminRoutes(app, opts, costTracker, logger);
   registerPrivacyRoutes(app, opts, logger);
-  // W5-T02/T03: Worker manager for process-isolated sessions
-  const workerManager = new WorkerManager(logger);
-  const queryMutex = new QueryMutex();
-
   registerWebSocketRoute(app, opts, usageTracker, logger, rateLimiter, costTracker, workerManager, queryMutex);
 
   // ─── File watcher for hot reload ───
@@ -1172,9 +1227,9 @@ export async function startServer(opts: ServeOptions): Promise<void> {
           for (const entry of opts.access.users) {
             costTracker.setBudget(entry.name, entry.budget);
           }
-          // Disconnect revoked tokens — compare stored hash against known hashes
+          // W6-T04: Disconnect revoked tokens — timing-safe comparison of stored hash
           for (const [ws, clientInfo] of connectedClients) {
-            const stillValid = opts.access.users.some((entry) => entry.tokenHash === clientInfo.tokenHash);
+            const stillValid = opts.access.users.some((entry) => safeCompare(entry.tokenHash, clientInfo.tokenHash));
             if (!stillValid) {
               try {
                 ws.send(

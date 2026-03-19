@@ -20,6 +20,7 @@ const WORKER_PATH = fileURLToPath(new URL("./session-worker.ts", import.meta.url
 
 const WORKER_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const DEFAULT_MAX_WORKERS = 20;
+const WORKER_READY_TIMEOUT_MS = 30_000; // W6-T06: 30s for worker to send "ready"
 
 export type WorkerMessageHandler = (msg: WorkerToParentMessage) => void;
 export type WorkerExitHandler = (code: number | null, signal: string | null) => void;
@@ -39,6 +40,8 @@ interface InternalWorkerState {
   exitHandlerRef: { current: WorkerExitHandler };
   idleTimer: ReturnType<typeof setTimeout>;
   killTimer: ReturnType<typeof setTimeout> | null;
+  readyTimer: ReturnType<typeof setTimeout> | null; // W6-T06
+  ready: boolean; // W6-T06
 }
 
 export class WorkerManager {
@@ -48,7 +51,9 @@ export class WorkerManager {
 
   constructor(logger: Logger, maxWorkers = DEFAULT_MAX_WORKERS) {
     this.logger = logger;
-    this.maxWorkers = maxWorkers;
+    // P1-3: Clamp to prevent config typos from breaking serve mode entirely.
+    // NaN/undefined/null fall back to default; 0 and negative clamp to 1.
+    this.maxWorkers = Math.max(1, Math.floor(Number(maxWorkers)) || DEFAULT_MAX_WORKERS);
   }
 
   /**
@@ -109,7 +114,16 @@ export class WorkerManager {
     child.on("message", (raw: unknown) => {
       state.handle.lastActivity = Date.now();
       this.resetIdleTimer(state);
-      handlerRef.current(raw as WorkerToParentMessage);
+      // W6-T06: Clear ready timer on first "ready" message
+      const msg = raw as WorkerToParentMessage;
+      if (!state.ready && msg && typeof msg === "object" && (msg as any).type === "ready") {
+        state.ready = true;
+        if (state.readyTimer) {
+          clearTimeout(state.readyTimer);
+          state.readyTimer = null;
+        }
+      }
+      handlerRef.current(msg);
     });
 
     // Handle worker exit
@@ -119,6 +133,7 @@ export class WorkerManager {
       });
       clearTimeout(state.idleTimer);
       if (state.killTimer) clearTimeout(state.killTimer);
+      if (state.readyTimer) clearTimeout(state.readyTimer); // W6-T06
       this.workers.delete(conversationKey);
       exitHandlerRef.current(code, signal);
     });
@@ -144,9 +159,26 @@ export class WorkerManager {
       exitHandlerRef,
       idleTimer: setTimeout(() => {}, 0), // placeholder
       killTimer: null,
+      readyTimer: null,
+      ready: false,
     };
     this.resetIdleTimer(state);
     this.workers.set(conversationKey, state);
+
+    // W6-T06: Ready timeout — kill worker if it doesn't send "ready" within 30s
+    state.readyTimer = setTimeout(() => {
+      if (!state.ready) {
+        this.logger.error(
+          "session",
+          "worker.ready_timeout",
+          `Worker ready timeout after ${WORKER_READY_TIMEOUT_MS}ms`,
+          {
+            details: { conversationKey },
+          },
+        );
+        this.kill(conversationKey);
+      }
+    }, WORKER_READY_TIMEOUT_MS);
 
     // Send init message
     const initMsg: IpcInitMessage = {
@@ -198,6 +230,7 @@ export class WorkerManager {
 
     clearTimeout(state.idleTimer);
     if (state.killTimer) clearTimeout(state.killTimer);
+    if (state.readyTimer) clearTimeout(state.readyTimer); // W6-T06
 
     if (state.handle.process.connected) {
       try {
@@ -227,6 +260,11 @@ export class WorkerManager {
   /** Number of active workers. */
   get size(): number {
     return this.workers.size;
+  }
+
+  /** Maximum number of workers (W6-T09 — for health reporting). */
+  get capacity(): number {
+    return this.maxWorkers;
   }
 
   private resetIdleTimer(state: InternalWorkerState): void {

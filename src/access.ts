@@ -37,7 +37,7 @@ export function hashToken(token: string): string {
  * Constant-time comparison of two hex strings.
  * Prevents timing side-channel attacks on token validation.
  */
-function safeCompare(a: string, b: string): boolean {
+export function safeCompare(a: string, b: string): boolean {
   const bufA = Buffer.from(a);
   const bufB = Buffer.from(b);
   if (bufA.length !== bufB.length) return false;

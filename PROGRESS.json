@@ -1,68 +1,122 @@
 {
-  "wave": "Wave 5.1: Validation Sprint",
+  "wave": "Wave 6: Process Isolation Hardening",
   "started": "2026-03-18",
   "updatedAt": "2026-03-18",
   "status": "complete",
   "items": [
     {
-      "id": "W5.1-T01",
-      "name": "IPC round-trip and worker lifecycle validation",
+      "id": "W6-T01",
+      "name": "SDK stream processing shared abstraction",
       "status": "completed",
-      "files": ["src/session-worker.test.ts"],
+      "files": ["src/sdk-stream.ts", "src/session-worker.ts", "src/components/App.tsx"],
       "validation": [
-        "P0-1: settled flag prevents double-resolve — tested with safeResolve pattern ✓",
-        "P0-1: settled flag prevents resolve after reject — tested with safeReject-first pattern ✓",
-        "P0-3: process.send undefined in test process (simulates missing IPC) — returns false ✓",
-        "F2: frame type allowlist rejects unknown types (evil_payload, __proto__, constructor, error, budget_exceeded) ✓",
-        "F2: all 9 valid frame types accepted by allowlist ✓"
+        "SdkStreamProcessor extracted to src/sdk-stream.ts — 15 typed event kinds, single extractSdkEvent() function ✓",
+        "session-worker.ts uses shared processor — all `as any` casts removed from stream loop ✓",
+        "App.tsx uses shared processor — all `as any` casts removed from stream loop ✓",
+        "15 unit tests for extractSdkEvent covering all event kinds + null cases ✓",
+        "Full test suite (264 tests) passes — no behavioral regression ✓",
+        "TypeScript compiles with zero errors ✓"
       ]
     },
     {
-      "id": "W5.1-T02",
-      "name": "Mutex queue correctness under contention",
+      "id": "W6-T02",
+      "name": "Double error on worker init failure",
       "status": "completed",
-      "files": ["src/session-worker.test.ts", "src/query-mutex.ts"],
+      "files": ["src/serve.ts"],
       "validation": [
-        "10 concurrent acquires on same key execute in strict FIFO order (0-9) ✓",
-        "5 keys × 3 acquires: cross-key concurrency verified, same-key FIFO verified ✓",
-        "Release wakes exactly one waiter (not all) — counted incrementally ✓",
-        "Acquire-release-acquire cycle (5 iterations) leaves no stale state ✓",
-        "Double-release is no-op ✓",
-        "3+ concurrent acquires (original P1-2 repro) pass ✓",
-        "All 10 mutex tests pass ✓"
+        "Worker error IPC handler now calls safeReject() — settles promise before exit handler fires ✓",
+        "Exit handler's safeReject is a no-op when error already settled (via settled flag) ✓",
+        "Error message forwarded to client via ws.send before promise rejection ✓",
+        "Worker still exits non-zero on init failure (process.exit(1) unchanged in session-worker.ts) ✓"
       ]
     },
     {
-      "id": "W5.1-T03",
-      "name": "Security hardening validation",
+      "id": "W6-T03",
+      "name": "QueryMutex timeout",
       "status": "completed",
-      "files": ["src/session-worker.test.ts"],
+      "files": ["src/query-mutex.ts", "src/serve.ts", "src/session-worker.test.ts"],
       "validation": [
-        "F3: execArgv filter strips --inspect, --inspect-brk, --debug; preserves --require, --import ✓",
-        "F5: rate limit key is 64-char hex hash, not raw token ✓",
-        "F2: frame allowlist rejects malicious types ✓"
+        "acquire(key, timeoutMs) signature added — optional parameter, backward compatible ✓",
+        "MutexTimeoutError thrown with key and timeoutMs properties ✓",
+        "Timed-out waiter removed from queue via splice ✓",
+        "serve.ts passes 5-minute timeout to prevent permanent lockout ✓",
+        "5 new tests: timeout throws, waiter removed, no regression, success-in-time, FIFO preserved ✓",
+        "All existing mutex tests pass without modification ✓"
       ]
     },
     {
-      "id": "W5.1-T04",
-      "name": "Worker behavior validation",
+      "id": "W6-T04",
+      "name": "Token revocation safeCompare",
       "status": "completed",
-      "files": ["src/session-worker.test.ts"],
+      "files": ["src/access.ts", "src/serve.ts"],
       "validation": [
-        "P0-1: settled flag pattern prevents double-resolve (2 tests) ✓",
-        "P0-3: send() gracefully handles missing process.send ✓"
+        "safeCompare exported from access.ts (was private function) ✓",
+        "serve.ts imports safeCompare ✓",
+        "onAccessChange uses safeCompare for tokenHash comparison ✓",
+        "3 unit tests: equal strings, different strings, different-length strings ✓"
       ]
     },
     {
-      "id": "W5.1-T05",
-      "name": "Worker environment isolation",
+      "id": "W6-T05",
+      "name": "WebSocket message schema validation",
       "status": "completed",
-      "files": ["src/session-worker.test.ts"],
+      "files": ["src/ws-protocol.ts", "src/serve.ts", "src/session-worker.test.ts"],
       "validation": [
-        "buildShellEnv includes agent env keys + safe system vars ✓",
-        "Worker env construction includes only expected keys (no DATABASE_URL, AWS_SECRET_ACCESS_KEY, NODE_ENV) ✓",
-        "Missing ANTHROPIC_API_KEY is omitted (not empty string) ✓",
-        "Agent-specific keys from loadAgentEnv pass through ✓"
+        "Zod discriminated union schema for all 6 WS client message types ✓",
+        "validateWsMessage() returns discriminated { ok, message } | { ok, error } result ✓",
+        "serve.ts calls validateWsMessage after JSON.parse, rejects invalid with structured error ✓",
+        "15 unit tests: valid messages, type coercion rejects, unknown types, null/non-object, empty fields ✓"
+      ]
+    },
+    {
+      "id": "W6-T06",
+      "name": "Worker ready timeout",
+      "status": "completed",
+      "files": ["src/worker-manager.ts"],
+      "validation": [
+        "30s WORKER_READY_TIMEOUT_MS constant added ✓",
+        "InternalWorkerState gains readyTimer and ready flag ✓",
+        "Ready timer started on spawn, cleared when 'ready' IPC received ✓",
+        "Timeout kills worker via this.kill(conversationKey) ✓",
+        "Timer cleared on worker exit and kill() to prevent leaks ✓"
+      ]
+    },
+    {
+      "id": "W6-T07",
+      "name": "Pending approval cleanup on worker crash",
+      "status": "completed",
+      "files": ["src/serve.ts"],
+      "validation": [
+        "workerExitHandler iterates pendingApprovals and resolves each with false (denied) ✓",
+        "Client receives tool_approval_rejected frame with reason for each pending approval ✓",
+        "pendingApprovals.clear() called after processing ✓",
+        "WS send wrapped in try/catch (connection may already be closed) ✓"
+      ]
+    },
+    {
+      "id": "W6-T08",
+      "name": "Configurable maxWorkers in HarnessConfig",
+      "status": "completed",
+      "files": ["src/config.ts", "src/serve.ts"],
+      "validation": [
+        "serve.maxWorkers added to HarnessConfig interface (optional number) ✓",
+        "Default remains 20 (DEFAULT_MAX_WORKERS in worker-manager.ts) ✓",
+        "WorkerManager receives opts.config.serve?.maxWorkers in serve.ts ✓",
+        "config.yaml override flows through deepMerge ✓"
+      ]
+    },
+    {
+      "id": "W6-T09",
+      "name": "Worker pool size in /health/deep",
+      "status": "completed",
+      "files": ["src/health.ts", "src/serve.ts", "src/worker-manager.ts"],
+      "validation": [
+        "WorkerPoolStats interface added: { active, max, utilization } ✓",
+        "DeepHealth.stats.workerPool field added ✓",
+        "HealthMonitor constructor accepts getWorkerPoolStats callback ✓",
+        "serve.ts passes lambda using workerManager.size and workerManager.capacity ✓",
+        "WorkerManager.capacity getter exposes maxWorkers ✓",
+        "utilization = active/max rounded to 3 decimal places ✓"
       ]
     }
   ]

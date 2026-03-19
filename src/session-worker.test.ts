@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { generateAccessToken, hashToken } from "./access.js";
+import { generateAccessToken, hashToken, safeCompare } from "./access.js";
 import { resolveRemoteAgent } from "./agent-context.js";
 import {
   type IpcInitMessage,
@@ -10,7 +10,9 @@ import {
   type ParentToWorkerMessage,
   type WorkerToParentMessage,
 } from "./ipc-protocol.js";
-import { QueryMutex } from "./query-mutex.js";
+import { MutexTimeoutError, QueryMutex } from "./query-mutex.js";
+import { extractSdkEvent } from "./sdk-stream.js";
+import { validateWsMessage } from "./ws-protocol.js";
 
 // ─── IPC protocol type guards ───
 
@@ -604,5 +606,405 @@ describe("generateAccessToken (W5-T07)", () => {
     const b = generateAccessToken();
     assert.notStrictEqual(a.token, b.token);
     assert.notStrictEqual(a.tokenHash, b.tokenHash);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// ─── Wave 6: Process Isolation Hardening ───
+// ═══════════════════════════════════════════════════════
+
+// ─── W6-T01: SDK stream processor ───
+
+describe("SdkStreamProcessor (W6-T01)", () => {
+  it("extracts init event from system message", () => {
+    const event = extractSdkEvent({ type: "system", subtype: "init", session_id: "s1" });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "init");
+    if (event.kind === "init") assert.strictEqual(event.sessionId, "s1");
+  });
+
+  it("extracts text_token from stream_event", () => {
+    const event = extractSdkEvent({
+      type: "stream_event",
+      event: { type: "content_block_delta", delta: { type: "text_delta", text: "hello" } },
+    });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "text_token");
+    if (event.kind === "text_token") assert.strictEqual(event.text, "hello");
+  });
+
+  it("extracts thinking_token from stream_event", () => {
+    const event = extractSdkEvent({
+      type: "stream_event",
+      event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "hmm" } },
+    });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "thinking_token");
+    if (event.kind === "thinking_token") assert.strictEqual(event.text, "hmm");
+  });
+
+  it("extracts tool_use_start and strips MCP prefix", () => {
+    const event = extractSdkEvent({
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        content_block: { type: "tool_use", name: "mcp__web__web_fetch", id: "t1" },
+      },
+    });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "tool_use_start");
+    if (event.kind === "tool_use_start") {
+      assert.strictEqual(event.toolName, "web_fetch");
+      assert.strictEqual(event.toolId, "t1");
+    }
+  });
+
+  it("extracts tool_input_delta", () => {
+    const event = extractSdkEvent({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        delta: { type: "input_json_delta", partial_json: '{"url":' },
+        content_block: { id: "t1" },
+      },
+    });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "tool_input_delta");
+    if (event.kind === "tool_input_delta") {
+      assert.strictEqual(event.partialJson, '{"url":');
+    }
+  });
+
+  it("extracts text_block_start", () => {
+    const event = extractSdkEvent({
+      type: "stream_event",
+      event: { type: "content_block_start", content_block: { type: "text" } },
+    });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "text_block_start");
+  });
+
+  it("extracts message_start with usage", () => {
+    const event = extractSdkEvent({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: { usage: { input_tokens: 100, cache_read_input_tokens: 50 } },
+      },
+    });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "message_start");
+    if (event.kind === "message_start") {
+      assert.strictEqual(event.usage.input_tokens, 100);
+    }
+  });
+
+  it("extracts tool_block_stop", () => {
+    const event = extractSdkEvent({
+      type: "stream_event",
+      event: { type: "content_block_stop" },
+    });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "tool_block_stop");
+  });
+
+  it("extracts subagent_started", () => {
+    const event = extractSdkEvent({
+      type: "system",
+      subtype: "task_started",
+      task_id: "t1",
+      description: "research",
+    });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "subagent_started");
+    if (event.kind === "subagent_started") {
+      assert.strictEqual(event.taskId, "t1");
+      assert.strictEqual(event.description, "research");
+    }
+  });
+
+  it("extracts subagent_progress", () => {
+    const event = extractSdkEvent({
+      type: "system",
+      subtype: "task_progress",
+      task_id: "t1",
+      usage: { tool_uses: 3, duration_ms: 5000, total_tokens: 1500 },
+    });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "subagent_progress");
+    if (event.kind === "subagent_progress") {
+      assert.strictEqual(event.toolUses, 3);
+    }
+  });
+
+  it("extracts subagent_done", () => {
+    const event = extractSdkEvent({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "t1",
+      status: "completed",
+      summary: "done",
+      usage: { total_tokens: 2000 },
+    });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "subagent_done");
+    if (event.kind === "subagent_done") {
+      assert.strictEqual(event.status, "completed");
+    }
+  });
+
+  it("extracts assistant with usage and text fallback", () => {
+    const event = extractSdkEvent({
+      type: "assistant",
+      message: {
+        usage: { input_tokens: 200, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        content: [{ type: "text", text: "Hello!" }, { type: "tool_use" }],
+      },
+    });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "assistant");
+    if (event.kind === "assistant") {
+      assert.strictEqual(event.usage?.output_tokens, 50);
+      assert.strictEqual(event.textContent, "Hello!");
+    }
+  });
+
+  it("extracts result with is_interrupted", () => {
+    const event = extractSdkEvent({ type: "result", is_interrupted: true });
+    assert.ok(event);
+    assert.strictEqual(event.kind, "result");
+    if (event.kind === "result") assert.strictEqual(event.isInterrupted, true);
+  });
+
+  it("returns null for unknown message types", () => {
+    assert.strictEqual(extractSdkEvent({ type: "unknown_type" }), null);
+    assert.strictEqual(extractSdkEvent(null), null);
+    assert.strictEqual(extractSdkEvent("not an object"), null);
+  });
+
+  it("returns null for system messages with unknown subtype", () => {
+    assert.strictEqual(extractSdkEvent({ type: "system", subtype: "unknown" }), null);
+  });
+});
+
+// ─── W6-T03: QueryMutex timeout ───
+
+describe("QueryMutex timeout (W6-T03)", () => {
+  it("acquire with timeout throws MutexTimeoutError on locked key", async () => {
+    const mutex = new QueryMutex();
+    // Lock the key
+    await mutex.acquire("locked");
+
+    const start = Date.now();
+    try {
+      await mutex.acquire("locked", 100);
+      assert.fail("Should have thrown MutexTimeoutError");
+    } catch (err) {
+      assert.ok(err instanceof MutexTimeoutError);
+      assert.strictEqual(err.key, "locked");
+      assert.strictEqual(err.timeoutMs, 100);
+      const elapsed = Date.now() - start;
+      assert.ok(elapsed >= 90 && elapsed < 300, `Should timeout in ~100ms, took ${elapsed}ms`);
+    }
+  });
+
+  it("timed-out waiter is removed from queue", async () => {
+    const mutex = new QueryMutex();
+    const release = await mutex.acquire("key");
+
+    // Queue a waiter that will timeout
+    try {
+      await mutex.acquire("key", 50);
+    } catch {
+      // expected
+    }
+
+    // Release the original lock
+    release();
+
+    // Key should be unlocked — the timed-out waiter was removed
+    assert.ok(!mutex.isLocked("key"));
+  });
+
+  it("acquire without timeout still works (no regression)", async () => {
+    const mutex = new QueryMutex();
+    const release = await mutex.acquire("key");
+    assert.ok(mutex.isLocked("key"));
+    release();
+    assert.ok(!mutex.isLocked("key"));
+  });
+
+  it("acquire with timeout succeeds if lock becomes available in time", async () => {
+    const mutex = new QueryMutex();
+    const release1 = await mutex.acquire("key");
+
+    // Release after 30ms — timeout is 200ms, so the waiter should succeed
+    setTimeout(() => release1(), 30);
+
+    const release2 = await mutex.acquire("key", 200);
+    assert.ok(typeof release2 === "function");
+    release2();
+  });
+
+  it("timeout does not break FIFO for remaining waiters", async () => {
+    const mutex = new QueryMutex();
+    const order: string[] = [];
+
+    const holder = await mutex.acquire("key");
+
+    // Waiter A: will timeout
+    const a = mutex.acquire("key", 50).catch(() => order.push("a-timeout"));
+
+    // Waiter B: no timeout
+    const b = (async () => {
+      const r = await mutex.acquire("key");
+      order.push("b-acquired");
+      r();
+    })();
+
+    // Wait for A to timeout
+    await a;
+
+    // Release the initial lock — B should get it
+    holder();
+    await b;
+
+    assert.deepStrictEqual(order, ["a-timeout", "b-acquired"]);
+  });
+
+  it("timed-out entry does not orphan subsequent waiters (race fix)", async () => {
+    const mutex = new QueryMutex();
+    const order: string[] = [];
+
+    const holder = await mutex.acquire("key");
+
+    // Waiter A: will timeout quickly
+    const a = mutex.acquire("key", 30).catch(() => order.push("a-timeout"));
+
+    // Waiter B: no timeout, should eventually acquire
+    const b = (async () => {
+      const r = await mutex.acquire("key");
+      order.push("b-acquired");
+      r();
+    })();
+
+    // Waiter C: no timeout, should acquire after B
+    const c = (async () => {
+      const r = await mutex.acquire("key");
+      order.push("c-acquired");
+      r();
+    })();
+
+    // Let A timeout
+    await a;
+
+    // Release holder — B and C should both get their turn despite A's timeout
+    holder();
+    await Promise.all([b, c]);
+
+    assert.deepStrictEqual(order, ["a-timeout", "b-acquired", "c-acquired"]);
+  });
+});
+
+// ─── W6-T04: safeCompare export ───
+
+describe("safeCompare export (W6-T04)", () => {
+  it("safeCompare returns true for equal strings", () => {
+    const hash = hashToken("test-token");
+    assert.ok(safeCompare(hash, hash));
+  });
+
+  it("safeCompare returns false for different strings", () => {
+    assert.ok(!safeCompare(hashToken("a"), hashToken("b")));
+  });
+
+  it("safeCompare returns false for different-length strings", () => {
+    assert.ok(!safeCompare("short", "muchlongerstring"));
+  });
+});
+
+// ─── W6-T05: WebSocket message schema validation ───
+
+describe("WS message schema validation (W6-T05)", () => {
+  it("validates subscribe message", () => {
+    const result = validateWsMessage({ type: "subscribe", agentId: "billing" });
+    assert.ok(result.ok);
+    if (result.ok) assert.strictEqual(result.message.type, "subscribe");
+  });
+
+  it("validates subscribe with sessionId and lastMessageId", () => {
+    const result = validateWsMessage({
+      type: "subscribe",
+      agentId: "billing",
+      sessionId: "s1",
+      lastMessageId: 42,
+    });
+    assert.ok(result.ok);
+  });
+
+  it("validates message with string content", () => {
+    const result = validateWsMessage({ type: "message", content: "hello" });
+    assert.ok(result.ok);
+  });
+
+  it("rejects message with numeric content", () => {
+    const result = validateWsMessage({ type: "message", content: 123 });
+    assert.ok(!result.ok);
+    if (!result.ok) assert.ok(result.error.includes("content"));
+  });
+
+  it("rejects message with empty content", () => {
+    const result = validateWsMessage({ type: "message", content: "" });
+    assert.ok(!result.ok);
+  });
+
+  it("validates interrupt", () => {
+    const result = validateWsMessage({ type: "interrupt" });
+    assert.ok(result.ok);
+  });
+
+  it("validates ping", () => {
+    const result = validateWsMessage({ type: "ping" });
+    assert.ok(result.ok);
+  });
+
+  it("validates tool_approval", () => {
+    const result = validateWsMessage({ type: "tool_approval", toolId: "t1", approved: true });
+    assert.ok(result.ok);
+  });
+
+  it("rejects tool_approval with string approved", () => {
+    const result = validateWsMessage({ type: "tool_approval", toolId: "t1", approved: "yes" });
+    assert.ok(!result.ok);
+  });
+
+  it("validates consent_granted", () => {
+    const result = validateWsMessage({ type: "consent_granted", policyVersion: "2026-03-01" });
+    assert.ok(result.ok);
+  });
+
+  it("rejects unknown message type", () => {
+    const result = validateWsMessage({ type: "evil_command", payload: "drop tables" });
+    assert.ok(!result.ok);
+  });
+
+  it("rejects non-object input", () => {
+    const result = validateWsMessage("not an object");
+    assert.ok(!result.ok);
+  });
+
+  it("rejects null input", () => {
+    const result = validateWsMessage(null);
+    assert.ok(!result.ok);
+  });
+
+  it("rejects subscribe with empty agentId", () => {
+    const result = validateWsMessage({ type: "subscribe", agentId: "" });
+    assert.ok(!result.ok);
+  });
+
+  it("rejects subscribe with missing agentId", () => {
+    const result = validateWsMessage({ type: "subscribe" });
+    assert.ok(!result.ok);
   });
 });

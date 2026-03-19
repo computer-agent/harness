@@ -219,9 +219,9 @@ See `SECURITY-WAVES-5.1-5.2.md` for detailed validation tasks. 5 tasks covering 
 
 ---
 
-## Wave 6: Process Isolation Hardening — NOT STARTED
+## Wave 6: Process Isolation Hardening — COMPLETE (2026-03-18)
 
-Depends on Wave 5. ~1-2 weeks. Addresses deferred findings from the Wave 5 security/engineering/architecture reviews.
+See `PROGRESS.json` for detailed validation. All 9 tasks done, 264 tests pass (263 pass, 1 skip).
 
 | Task | Files | Description | Source |
 |------|-------|-------------|--------|
@@ -240,15 +240,15 @@ Depends on Wave 5. ~1-2 weeks. Addresses deferred findings from the Wave 5 secur
 - All others are independent
 
 ### Verification checklist (Wave 6)
-- [ ] SdkStreamProcessor used by both session-worker.ts and App.tsx
-- [ ] Worker init failure produces exactly one error to client
-- [ ] Mutex acquire with timeout throws and releases correctly
-- [ ] Token revocation uses timing-safe comparison
-- [ ] Malformed WS messages rejected with structured error
-- [ ] Worker ready timeout kills stuck workers within 30s
-- [ ] Worker crash clears pending approvals and notifies client
-- [ ] `serve.maxWorkers` configurable via config.yaml
-- [ ] `/health/deep` reports worker pool utilization
+- [x] SdkStreamProcessor used by both session-worker.ts and App.tsx
+- [x] Worker init failure produces exactly one error to client
+- [x] Mutex acquire with timeout throws and releases correctly
+- [x] Token revocation uses timing-safe comparison
+- [x] Malformed WS messages rejected with structured error
+- [x] Worker ready timeout kills stuck workers within 30s
+- [x] Worker crash clears pending approvals and notifies client
+- [x] `serve.maxWorkers` configurable via config.yaml
+- [x] `/health/deep` reports worker pool utilization
 
 ---
 

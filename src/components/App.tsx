@@ -7,6 +7,7 @@ import { buildOptions, buildSystemPrompt, sendMessage } from "../agent.js";
 import type { AgentContext } from "../agent-context.js";
 import type { HarnessConfig } from "../config.js";
 import { formatErrorShort } from "../errors.js";
+import { extractSdkEvent } from "../sdk-stream.js";
 import {
   createSessionMeta,
   findSessionByName,
@@ -459,116 +460,102 @@ export function App({ initialSessionId, initialSessionName, agentContext, config
             });
           }
 
-          if (msg.type === "system" && (msg as any).subtype === "init" && msg.session_id) {
-            activeSessionId = msg.session_id;
-            dispatch({ type: "SET_SESSION", sessionId: msg.session_id });
-            if (!state.sessionId) {
-              const meta = createSessionMeta(msg.session_id, trimmed);
-              await saveSession(sessionDirs, meta);
-              dispatch({ type: "SET_SESSION_NAME", name: meta.name });
-            }
-          }
+          const event = extractSdkEvent(msg);
+          if (!event) continue;
 
-          if (msg.type === "system" && (msg as any).subtype === "task_started") {
-            const m = msg as any;
-            dispatch({ type: "SUBAGENT_STARTED", taskId: m.task_id, description: m.description ?? "" });
-          }
+          switch (event.kind) {
+            case "init":
+              activeSessionId = event.sessionId;
+              dispatch({ type: "SET_SESSION", sessionId: event.sessionId });
+              if (!state.sessionId) {
+                const meta = createSessionMeta(event.sessionId, trimmed);
+                await saveSession(sessionDirs, meta);
+                dispatch({ type: "SET_SESSION_NAME", name: meta.name });
+              }
+              break;
 
-          if (msg.type === "system" && (msg as any).subtype === "task_progress") {
-            const m = msg as any;
-            dispatch({
-              type: "SUBAGENT_PROGRESS",
-              taskId: m.task_id,
-              toolUses: m.usage?.tool_uses ?? 0,
-              durationMs: m.usage?.duration_ms ?? 0,
-              totalTokens: m.usage?.total_tokens ?? 0,
-            });
-          }
+            case "message_start":
+              dispatch({ type: "UPDATE_CONTEXT", tokens: totalInputTokens(event.usage) });
+              break;
 
-          if (msg.type === "system" && (msg as any).subtype === "task_notification") {
-            const m = msg as any;
-            dispatch({
-              type: "SUBAGENT_DONE",
-              taskId: m.task_id,
-              status: m.status,
-              summary: m.summary ?? "",
-              totalTokens: m.usage?.total_tokens ?? 0,
-            });
-          }
-
-          if (msg.type === "stream_event") {
-            const event = (msg as any).event;
-
-            if (event?.type === "message_start" && event.message?.usage) {
-              dispatch({ type: "UPDATE_CONTEXT", tokens: totalInputTokens(event.message.usage) });
-            }
-
-            if (event?.type === "content_block_start" && event.content_block?.type === "tool_use") {
-              const raw = event.content_block.name ?? "unknown";
-              const clean = raw.replace(/^mcp__.+?__/, "");
-              dispatch({ type: "TOOL_USE", name: clean });
-              toolNameRef.current = clean;
+            case "tool_use_start":
+              dispatch({ type: "TOOL_USE", name: event.toolName });
+              toolNameRef.current = event.toolName;
               toolInputRef.current = "";
               inToolUseRef.current = true;
-            }
+              break;
 
-            if (
-              event?.type === "content_block_delta" &&
-              event.delta?.type === "input_json_delta" &&
-              inToolUseRef.current
-            ) {
-              toolInputRef.current += event.delta.partial_json;
-            }
+            case "tool_input_delta":
+              if (inToolUseRef.current) {
+                toolInputRef.current += event.partialJson;
+              }
+              break;
 
-            if (event?.type === "content_block_stop" && inToolUseRef.current) {
-              inToolUseRef.current = false;
-              try {
-                const input = JSON.parse(toolInputRef.current);
-                const detail = extractToolDetail(toolNameRef.current, input);
-                if (detail) dispatch({ type: "TOOL_USE_DETAIL", detail });
-              } catch {}
-            }
+            case "tool_block_stop":
+              if (inToolUseRef.current) {
+                inToolUseRef.current = false;
+                try {
+                  const input = JSON.parse(toolInputRef.current);
+                  const detail = extractToolDetail(toolNameRef.current, input);
+                  if (detail) dispatch({ type: "TOOL_USE_DETAIL", detail });
+                } catch {}
+              }
+              break;
 
-            if (
-              event?.type === "content_block_delta" &&
-              event.delta?.type === "thinking_delta" &&
-              event.delta.thinking
-            ) {
-              dispatch({ type: "THINKING_TOKEN", token: event.delta.thinking });
-            }
+            case "thinking_token":
+              dispatch({ type: "THINKING_TOKEN", token: event.text });
+              break;
 
-            if (event?.type === "content_block_start" && event.content_block?.type === "text") {
+            case "text_block_start":
               if (responseBuffer.length > 0) {
                 responseBuffer += "\n\n";
                 dispatch({ type: "STREAM_TOKEN", token: "\n\n" });
               }
-            }
+              break;
 
-            if (event?.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
-              responseBuffer += event.delta.text;
-              dispatch({ type: "STREAM_TOKEN", token: event.delta.text });
-            }
-          }
+            case "text_token":
+              responseBuffer += event.text;
+              dispatch({ type: "STREAM_TOKEN", token: event.text });
+              break;
 
-          if (msg.type === "assistant") {
-            const usage = (msg as any).message?.usage;
-            if (usage) {
-              dispatch({ type: "UPDATE_CONTEXT", tokens: totalInputTokens(usage) });
-            }
+            case "subagent_started":
+              dispatch({ type: "SUBAGENT_STARTED", taskId: event.taskId, description: event.description });
+              break;
 
-            if (!responseBuffer) {
-              const text = (msg as any).message?.content
-                ?.filter((block: any) => block.type === "text")
-                .map((block: any) => block.text)
-                .join("");
-              if (text) {
-                responseBuffer = text;
+            case "subagent_progress":
+              dispatch({
+                type: "SUBAGENT_PROGRESS",
+                taskId: event.taskId,
+                toolUses: event.toolUses,
+                durationMs: event.durationMs,
+                totalTokens: event.totalTokens,
+              });
+              break;
+
+            case "subagent_done":
+              dispatch({
+                type: "SUBAGENT_DONE",
+                taskId: event.taskId,
+                status: event.status as "completed" | "failed" | "stopped",
+                summary: event.summary,
+                totalTokens: event.totalTokens,
+              });
+              break;
+
+            case "assistant": {
+              const usage = event.usage;
+              if (usage) {
+                dispatch({ type: "UPDATE_CONTEXT", tokens: totalInputTokens(usage) });
               }
+              if (!responseBuffer && event.textContent) {
+                responseBuffer = event.textContent;
+              }
+              break;
             }
-          }
 
-          if (msg.type === "result" && (msg as any).is_interrupted) {
-            wasInterrupted = true;
+            case "result":
+              wasInterrupted = event.isInterrupted;
+              break;
           }
         }
 

@@ -31,6 +31,7 @@ import type {
 import { Logger } from "./logger.js";
 import type { AgentManifest } from "./manifest.js";
 import { REMOTE_SANDBOX_DEFAULTS, type RemoteSandboxPolicy } from "./sandbox.js";
+import { extractSdkEvent } from "./sdk-stream.js";
 
 // ─── Worker state ───
 
@@ -208,109 +209,94 @@ async function handleMessage(msg: IpcUserMessage): Promise<void> {
 
   try {
     for await (const sdkMsg of q) {
-      // Capture session ID from init
-      if (sdkMsg.type === "system" && (sdkMsg as any).subtype === "init" && sdkMsg.session_id) {
-        sessionId = sdkMsg.session_id;
-        const sessionMsg: IpcSessionIdMessage = {
-          type: "session_id",
-          sessionId: sdkMsg.session_id,
-          firstMessage: msg.content,
-        };
-        send(sessionMsg);
-      }
+      const event = extractSdkEvent(sdkMsg);
+      if (!event) continue;
 
-      // Stream events → frames
-      if (sdkMsg.type === "stream_event") {
-        const event = (sdkMsg as any).event;
-
-        // Text tokens
-        if (event?.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
-          responseBuffer += event.delta.text;
-          sendFrame({ type: "token", id: frameId++, text: event.delta.text });
+      switch (event.kind) {
+        case "init": {
+          sessionId = event.sessionId;
+          const sessionMsg: IpcSessionIdMessage = {
+            type: "session_id",
+            sessionId: event.sessionId,
+            firstMessage: msg.content,
+          };
+          send(sessionMsg);
+          break;
         }
 
-        // Thinking tokens
-        if (event?.type === "content_block_delta" && event.delta?.type === "thinking_delta" && event.delta.thinking) {
-          sendFrame({ type: "thinking_token", text: event.delta.thinking });
-        }
+        case "text_token":
+          responseBuffer += event.text;
+          sendFrame({ type: "token", id: frameId++, text: event.text });
+          break;
 
-        // Tool use start
-        if (event?.type === "content_block_start" && event.content_block?.type === "tool_use") {
-          const toolName = (event.content_block.name ?? "unknown").replace(/^mcp__.+?__/, "");
+        case "thinking_token":
+          sendFrame({ type: "thinking_token", text: event.text });
+          break;
+
+        case "tool_use_start":
           sendFrame({
             type: "tool_use_start",
             id: frameId++,
-            toolName,
-            toolId: event.content_block.id,
+            toolName: event.toolName,
+            toolId: event.toolId,
           });
           sendFrame({ type: "status", status: "tool_use" });
-          toolCallNames.push({ name: toolName, status: "complete" });
-        }
+          toolCallNames.push({ name: event.toolName, status: "complete" });
+          break;
 
-        // Tool input streaming
-        if (event?.type === "content_block_delta" && event.delta?.type === "input_json_delta") {
+        case "tool_input_delta":
           sendFrame({
             type: "tool_use_input",
-            toolId: event.content_block?.id ?? "",
-            partialJson: event.delta.partial_json,
+            toolId: event.toolId,
+            partialJson: event.partialJson,
           });
+          break;
+
+        case "subagent_started":
+          sendFrame({
+            type: "subagent_started",
+            taskId: event.taskId,
+            description: event.description,
+          });
+          break;
+
+        case "subagent_progress":
+          sendFrame({
+            type: "subagent_progress",
+            taskId: event.taskId,
+            toolUses: event.toolUses,
+            durationMs: event.durationMs,
+            totalTokens: event.totalTokens,
+          });
+          break;
+
+        case "subagent_done":
+          sendFrame({
+            type: "subagent_done",
+            taskId: event.taskId,
+            status: event.status,
+            summary: event.summary,
+            totalTokens: event.totalTokens,
+          });
+          break;
+
+        case "assistant": {
+          const usage = event.usage;
+          if (usage) {
+            accumulatedUsage.inputTokens += usage.input_tokens ?? 0;
+            accumulatedUsage.outputTokens += usage.output_tokens ?? 0;
+            accumulatedUsage.cacheReadTokens += usage.cache_read_input_tokens ?? 0;
+            accumulatedUsage.cacheCreationTokens += usage.cache_creation_input_tokens ?? 0;
+          }
+          if (!responseBuffer && event.textContent) {
+            responseBuffer = event.textContent;
+          }
+          break;
         }
-      }
 
-      // Sub-agent events
-      if (sdkMsg.type === "system" && (sdkMsg as any).subtype === "task_started") {
-        const m = sdkMsg as any;
-        sendFrame({
-          type: "subagent_started",
-          taskId: m.task_id,
-          description: m.description ?? "",
-        });
-      }
-
-      if (sdkMsg.type === "system" && (sdkMsg as any).subtype === "task_progress") {
-        const m = sdkMsg as any;
-        sendFrame({
-          type: "subagent_progress",
-          taskId: m.task_id,
-          toolUses: m.usage?.tool_uses ?? 0,
-          durationMs: m.usage?.duration_ms ?? 0,
-          totalTokens: m.usage?.total_tokens ?? 0,
-        });
-      }
-
-      if (sdkMsg.type === "system" && (sdkMsg as any).subtype === "task_notification") {
-        const m = sdkMsg as any;
-        sendFrame({
-          type: "subagent_done",
-          taskId: m.task_id,
-          status: m.status,
-          summary: m.summary ?? "",
-          totalTokens: m.usage?.total_tokens ?? 0,
-        });
-      }
-
-      // Assistant turn — accumulate usage
-      if (sdkMsg.type === "assistant") {
-        const usage = (sdkMsg as any).message?.usage;
-        if (usage) {
-          accumulatedUsage.inputTokens += usage.input_tokens ?? 0;
-          accumulatedUsage.outputTokens += usage.output_tokens ?? 0;
-          accumulatedUsage.cacheReadTokens += usage.cache_read_input_tokens ?? 0;
-          accumulatedUsage.cacheCreationTokens += usage.cache_creation_input_tokens ?? 0;
-        }
-        // Fallback content extraction
-        if (!responseBuffer) {
-          const text = (sdkMsg as any).message?.content
-            ?.filter((block: any) => block.type === "text")
-            .map((block: any) => block.text)
-            .join("");
-          if (text) responseBuffer = text;
-        }
-      }
-
-      // Result (end of turn)
-      if (sdkMsg.type === "result") {
-        wasInterrupted = !!(sdkMsg as any).is_interrupted;
+        case "result":
+          wasInterrupted = event.isInterrupted;
+          break;
       }
     }
   } catch (err) {
@@ -356,6 +342,12 @@ let shuttingDown = false;
 
 function handleShutdown(): void {
   shuttingDown = true;
+  // P1-2: Resolve pending tool approvals with denial to unblock the SDK query loop.
+  // Without this, the SDK hangs waiting for the approval callback until the 5s force-kill.
+  for (const [, resolver] of pendingApprovals) {
+    resolver(false);
+  }
+  pendingApprovals.clear();
   if (activeQuery) {
     activeQuery.interrupt();
     // Let the query loop finish and send its result before exiting.

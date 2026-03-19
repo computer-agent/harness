@@ -35,6 +35,7 @@ export interface HarnessConfig {
     logging?: {
       level?: "debug" | "info" | "warn" | "error";
     };
+    maxWorkers?: number; // W6-T08: max concurrent session workers (default 20)
     rateLimits?: {
       messagesPerMinute?: number;
       concurrentSessions?: number;
