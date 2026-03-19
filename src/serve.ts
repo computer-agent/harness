@@ -22,8 +22,9 @@ import { CostTracker } from "./cost.js";
 import { classifyError } from "./errors.js";
 import { HealthMonitor } from "./health.js";
 import {
-  ALLOWED_FRAME_TYPES,
   type IpcResultMessage,
+  isBufferableFrame,
+  sanitizeFrame,
   type WorkerConfig,
   type WorkerToParentMessage,
 } from "./ipc-protocol.js";
@@ -51,7 +52,7 @@ import {
   saveSession,
   touchSession,
 } from "./sessions.js";
-import type { WsAssistantMessage, WsToken, WsToolUseStart } from "./types/ws.js";
+import type { WsAssistantMessage, WsServerMessage } from "./types/ws.js";
 import { UsageTracker } from "./usage.js";
 import { FileWatcher } from "./watcher.js";
 import { WorkerManager } from "./worker-manager.js";
@@ -73,20 +74,32 @@ export interface ServeOptions {
   access: AccessConfig;
 }
 
-// ─── WebSocket safe-send helper (W7-T10) ───
+// ─── WebSocket helpers (W7-T10, W8-T05, W8-T06, W8.1-T02, W8.1-T05, W8.1-T11) ───
+// W8.1-T11: isBufferableFrame moved to ipc-protocol.ts, co-located with ALLOWED_FRAME_TYPES.
 
 /**
- * Wraps `ws.send(JSON.stringify(data))` in a try/catch.
- * Prevents cascading throws on closed sockets in post-processing,
- * error paths, and approval cleanup.
+ * W7-T10/W8-T05/W8.1-T05: Wraps `ws.send(JSON.stringify(data))` in a try/catch.
+ * Prevents cascading throws on closed sockets. Used for ALL ws.send calls in serve.ts.
+ * Typed as WsServerMessage to catch protocol drift at compile time.
  */
-function safeSend(ws: WebSocket, data: unknown): boolean {
+function safeSend(ws: WebSocket, data: WsServerMessage): boolean {
   try {
     ws.send(JSON.stringify(data));
     return true;
   } catch {
     // Socket already closed — nothing we can do
     return false;
+  }
+}
+
+/**
+ * W8.1-T08: Wrap ws.close() in try/catch to handle already-closed sockets.
+ */
+function safeClose(ws: WebSocket, code: number, reason: string): void {
+  try {
+    ws.close(code, reason);
+  } catch {
+    // Already closed
   }
 }
 
@@ -475,11 +488,11 @@ async function handleSubscribe(
   const allAgents = await listAgents();
   const agent = allAgents.find((a) => a.id === msg.agentId);
   if (!agent) {
-    ws.send(JSON.stringify({ type: "error", code: "agent_not_found", message: `Agent "${msg.agentId}" not found` }));
+    safeSend(ws, { type: "error", code: "agent_not_found", message: `Agent "${msg.agentId}" not found` });
     return null;
   }
   if (!userCanAccessAgent(agent, user)) {
-    ws.send(JSON.stringify({ type: "error", code: "access_denied", message: "Access denied" }));
+    safeSend(ws, { type: "error", code: "access_denied", message: "Access denied" });
     return null;
   }
 
@@ -488,12 +501,7 @@ async function handleSubscribe(
   const policyVersion = privacyConfig.policyVersion ?? DEFAULT_PRIVACY_CONFIG.policyVersion;
   const hasConsent = await checkConsent(user.name, policyVersion);
   if (!hasConsent) {
-    ws.send(
-      JSON.stringify({
-        type: "consent_required",
-        policyVersion,
-      }),
-    );
+    safeSend(ws, { type: "consent_required", policyVersion });
     return null;
   }
 
@@ -521,19 +529,17 @@ async function handleSubscribe(
   if (msg.lastMessageId !== undefined && sessionId) {
     const missed = messageBuffer.since(msg.lastMessageId);
     if (missed.length > 0) {
-      ws.send(JSON.stringify({ type: "replay", messages: missed }));
+      safeSend(ws, { type: "replay", messages: missed });
     }
   }
 
-  ws.send(
-    JSON.stringify({
-      type: "subscribed",
-      agentId: msg.agentId,
-      sessionId: sessionId ?? "(new)",
-      agentName: agent.displayName,
-      agentDescription: agent.description,
-    }),
-  );
+  safeSend(ws, {
+    type: "subscribed",
+    agentId: msg.agentId,
+    sessionId: sessionId ?? "(new)",
+    agentName: agent.displayName,
+    agentDescription: agent.description,
+  });
 
   return conversation;
 }
@@ -594,22 +600,26 @@ async function handleMessage(
               break;
 
             case "frame": {
-              // F2: Validate frame type against allowlist before relaying to WebSocket.
-              // A compromised worker could inject arbitrary JSON — only relay known frame types.
-              // W7-T08: ALLOWED_FRAME_TYPES now lives in ipc-protocol.ts at module scope.
-              const frame = workerMsg.frame;
-              if (!frame.type || !ALLOWED_FRAME_TYPES.has(frame.type as string)) {
-                logger.warn("session", "worker.frame_rejected", `Rejected unknown frame type: ${frame.type}`, {
-                  details: { workerKey },
-                });
+              // W8.1-T02: Sanitize frame — construct new object with only known fields.
+              // A compromised worker could inject extra properties; sanitizeFrame strips them.
+              // Also validates against ALLOWED_FRAME_TYPES (F2, W7-T08).
+              const sanitized = sanitizeFrame(workerMsg.frame);
+              if (!sanitized) {
+                logger.warn(
+                  "session",
+                  "worker.frame_rejected",
+                  `Rejected unknown frame type: ${workerMsg.frame.type}`,
+                  {
+                    details: { workerKey },
+                  },
+                );
                 break;
               }
-              // W7-T09: Narrowed types replace the `as any` cast — frame shape
-              // is validated by ALLOWED_FRAME_TYPES, and only bufferable types are pushed.
-              if (frame.type === "token" || frame.type === "tool_use_start") {
-                conversation.messageBuffer.push(frame as unknown as WsToken | WsToolUseStart);
+              // W8.1-T11: isBufferableFrame from ipc-protocol.ts
+              if (isBufferableFrame(sanitized)) {
+                conversation.messageBuffer.push(sanitized);
               }
-              safeSend(ws, frame);
+              safeSend(ws, sanitized);
               break;
             }
 
@@ -871,14 +881,16 @@ function registerWebSocketRoute(
           logger.warn("auth", "auth.failure", "Auth failure rate limited", {
             details: { connectionId, ip: clientIp },
           });
-          ws.close(4001, "Too many auth failures");
+          // W8.1-T08: Wrap ws.close() in try/catch
+          safeClose(ws, 4001, "Too many auth failures");
           return;
         }
         logger.warn("auth", "auth.failure", "WebSocket auth failed", {
           details: { connectionId },
         });
-        ws.send(JSON.stringify({ type: "error", code: "auth_failed", message: "Invalid token" }));
-        ws.close(4001, "Unauthorized");
+        safeSend(ws, { type: "error", code: "auth_failed", message: "Invalid token" });
+        // W8.1-T08: Wrap ws.close() in try/catch
+        safeClose(ws, 4001, "Unauthorized");
         return;
       }
 
@@ -892,14 +904,12 @@ function registerWebSocketRoute(
             details: { userId: user.name, connectionId },
           },
         );
-        ws.send(
-          JSON.stringify({
-            type: "warning",
-            code: "token_query_deprecated",
-            message:
-              "Passing token as query parameter is deprecated. Use the Authorization header or Sec-WebSocket-Protocol instead.",
-          }),
-        );
+        safeSend(ws, {
+          type: "warning",
+          code: "token_query_deprecated",
+          message:
+            "Passing token as query parameter is deprecated. Use the Authorization header or Sec-WebSocket-Protocol instead.",
+        });
       }
 
       // Connection limit per user
@@ -907,8 +917,9 @@ function registerWebSocketRoute(
         logger.warn("session", "session.created", "Connection limit exceeded", {
           details: { userId: user.name, connectionId },
         });
-        ws.send(JSON.stringify({ type: "error", code: "rate_limited", message: "Too many connections" }));
-        ws.close(4008, "Connection limit exceeded");
+        safeSend(ws, { type: "error", code: "rate_limited", message: "Too many connections" });
+        // W8.1-T08: Wrap ws.close() in try/catch
+        safeClose(ws, 4008, "Connection limit exceeded");
         return;
       }
 
@@ -922,14 +933,14 @@ function registerWebSocketRoute(
       // W4-T07: Store hash, not raw token — prevents credential leaks from memory dumps
       connectedClients.set(ws, { user, tokenHash: hashToken(tokenResult.token) });
 
-      ws.send(JSON.stringify({ type: "connected", connectionId }));
+      safeSend(ws, { type: "connected", connectionId });
 
       // Idle timeout — disconnect if no messages received
       let idleTimer = setTimeout(() => {
         logger.info("session", "session.ended", "WebSocket idle timeout", {
           details: { userId: user.name, connectionId },
         });
-        ws.close(4009, "Idle timeout");
+        safeClose(ws, 4009, "Idle timeout");
       }, rateLimiter.idleTimeoutMs);
 
       let activeConversation: ActiveConversation | null = null;
@@ -938,12 +949,12 @@ function registerWebSocketRoute(
         // Reset idle timer on any message
         clearTimeout(idleTimer);
         idleTimer = setTimeout(() => {
-          ws.close(4009, "Idle timeout");
+          safeClose(ws, 4009, "Idle timeout");
         }, rateLimiter.idleTimeoutMs);
 
         // Reject oversized messages
         if (raw.length > 1024 * 1024) {
-          ws.send(JSON.stringify({ type: "error", code: "message_too_large", message: "Message exceeds 1MB" }));
+          safeSend(ws, { type: "error", code: "message_too_large", message: "Message exceeds 1MB" });
           return;
         }
 
@@ -951,7 +962,7 @@ function registerWebSocketRoute(
         try {
           parsed = JSON.parse(raw.toString());
         } catch {
-          ws.send(JSON.stringify({ type: "error", code: "parse_error", message: "Invalid JSON" }));
+          safeSend(ws, { type: "error", code: "parse_error", message: "Invalid JSON" });
           return;
         }
 
@@ -961,7 +972,7 @@ function registerWebSocketRoute(
           logger.warn("session", "ws.invalid_message", validated.detail, {
             details: { connectionId, userId: user.name },
           });
-          ws.send(JSON.stringify({ type: "error", code: "invalid_message", message: validated.error }));
+          safeSend(ws, { type: "error", code: "invalid_message", message: validated.error });
           return;
         }
         const msg = validated.message;
@@ -982,45 +993,39 @@ function registerWebSocketRoute(
             }
             case "message": {
               if (!activeConversation) {
-                ws.send(JSON.stringify({ type: "error", code: "not_subscribed", message: "Subscribe first" }));
+                safeSend(ws, { type: "error", code: "not_subscribed", message: "Subscribe first" });
                 return;
               }
               // Message length check
               if (!rateLimiter.checkMessageLength(msg.content)) {
-                ws.send(
-                  JSON.stringify({
-                    type: "error",
-                    code: "message_too_large",
-                    message: "Message exceeds character limit",
-                  }),
-                );
+                safeSend(ws, {
+                  type: "error",
+                  code: "message_too_large",
+                  message: "Message exceeds character limit",
+                });
                 return;
               }
               // Per-user message rate limiting
               const rateCheck = rateLimiter.checkMessageRate(user.name);
               if (!rateCheck.allowed) {
-                ws.send(
-                  JSON.stringify({
-                    type: "error",
-                    code: "rate_limited",
-                    message: "Too many messages",
-                    retryAfter: rateCheck.retryAfter,
-                  }),
-                );
+                safeSend(ws, {
+                  type: "error",
+                  code: "rate_limited",
+                  message: "Too many messages",
+                  retryAfter: rateCheck.retryAfter,
+                });
                 return;
               }
               // Pre-flight budget check
               const budgetCheck = costTracker.checkBudget(user.name, activeConversation.sessionId ?? "");
               if (!budgetCheck.allowed && budgetCheck.exceeded) {
-                ws.send(
-                  JSON.stringify({
-                    type: "budget_exceeded",
-                    reason: budgetCheck.exceeded.budget,
-                    limit: budgetCheck.exceeded.limit,
-                    used: budgetCheck.exceeded.used,
-                    resetsAt: budgetCheck.exceeded.resetsAt,
-                  }),
-                );
+                safeSend(ws, {
+                  type: "budget_exceeded",
+                  reason: budgetCheck.exceeded.budget,
+                  limit: budgetCheck.exceeded.limit,
+                  used: budgetCheck.exceeded.used,
+                  resetsAt: budgetCheck.exceeded.resetsAt,
+                });
                 return;
               }
               await handleMessage(
@@ -1037,7 +1042,7 @@ function registerWebSocketRoute(
               break;
             }
             case "ping":
-              ws.send(JSON.stringify({ type: "pong" }));
+              safeSend(ws, { type: "pong" });
               break;
             case "tool_approval":
               if (activeConversation?.pendingApprovals) {
@@ -1050,7 +1055,7 @@ function registerWebSocketRoute(
               break;
             case "consent_granted": {
               await recordConsent(user.name, msg.policyVersion);
-              ws.send(JSON.stringify({ type: "status", status: "idle" }));
+              safeSend(ws, { type: "status", status: "idle" });
               break;
             }
             case "interrupt":
@@ -1202,11 +1207,7 @@ export async function startServer(opts: ServeOptions): Promise<void> {
           // F7: Filter roster per user's access — don't leak agent info to unauthorized users
           for (const [ws, clientInfo] of connectedClients) {
             const filtered = filterAgentsForUser(allAgents, clientInfo.user);
-            try {
-              ws.send(JSON.stringify({ type: "roster_updated", agents: filtered.map(agentToApiResponse) }));
-            } catch {
-              // Connection already closed
-            }
+            safeSend(ws, { type: "roster_updated", agents: filtered.map(agentToApiResponse) });
           }
           logger.info("agent", "roster.reloaded", `Roster reloaded: ${allAgents.length} agents`);
         } catch (err) {
@@ -1233,14 +1234,8 @@ export async function startServer(opts: ServeOptions): Promise<void> {
           for (const [ws, clientInfo] of connectedClients) {
             const stillValid = opts.access.users.some((entry) => safeCompare(entry.tokenHash, clientInfo.tokenHash));
             if (!stillValid) {
-              try {
-                ws.send(
-                  JSON.stringify({ type: "error", code: "token_revoked", message: "Your access has been revoked" }),
-                );
-                ws.close(4003, "Token revoked");
-              } catch {
-                // Already closed
-              }
+              safeSend(ws, { type: "error", code: "token_revoked", message: "Your access has been revoked" });
+              safeClose(ws, 4003, "Token revoked");
             }
           }
           logger.info("auth", "access.reloaded", "Access control reloaded");
@@ -1271,11 +1266,7 @@ export async function startServer(opts: ServeOptions): Promise<void> {
       // F7: Filter roster per user on broadcast
       for (const [ws, clientInfo] of connectedClients) {
         const filtered = filterAgentsForUser(allAgents, clientInfo.user);
-        try {
-          ws.send(JSON.stringify({ type: "roster_updated", agents: filtered.map(agentToApiResponse) }));
-        } catch {
-          // Connection already closed
-        }
+        safeSend(ws, { type: "roster_updated", agents: filtered.map(agentToApiResponse) });
       }
       logger.info("server", "admin.reload", "Manual reload completed");
       return { reloaded: true, agents: allAgents.length };
@@ -1351,11 +1342,7 @@ export async function startServer(opts: ServeOptions): Promise<void> {
 
     // Close all remaining WebSocket connections
     for (const [ws] of connectedClients) {
-      try {
-        ws.close(1001, "Server shutting down");
-      } catch {
-        // Already closed
-      }
+      safeClose(ws, 1001, "Server shutting down");
     }
 
     // Persist state

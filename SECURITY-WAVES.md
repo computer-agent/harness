@@ -368,7 +368,9 @@ Incorporates all deferred findings from Wave 6 security/engineering/architecture
 
 ---
 
-## Wave 8: Documentation Polish + Deferred Hardening — NOT STARTED
+## Wave 8: Documentation Polish + Deferred Hardening — COMPLETE (2026-03-18)
+
+See `PROGRESS.json` for detailed validation. All 8 tasks done, 308 tests pass.
 
 ### Group A: Documentation
 
@@ -397,21 +399,83 @@ Three independent reviews (security, engineering, architecture) identified four 
 - All others are independent
 
 ### Group B validation
-- [ ] Zero bare `ws.send(JSON.stringify(...))` calls remaining in serve.ts
-- [ ] `isBufferableFrame()` type guard validates frame shape at runtime
-- [ ] No `as unknown as` or `as any` casts in serve.ts WS relay paths
-- [ ] `WsClientMessage` type derived from Zod schema via `z.infer<>`
-- [ ] Adding an optional field to a Zod schema variant without updating the TS type causes a build failure
-- [ ] No `as WsClientMessage` cast in ws-protocol.ts
-- [ ] CLI subcommands live in `src/cli/*.ts` with a dispatcher in index.tsx
-- [ ] index.tsx is <200 lines (dispatcher + arg parsing + shared helpers only)
-- [ ] All existing tests continue to pass
+- [x] Zero bare `ws.send(JSON.stringify(...))` calls remaining in serve.ts
+- [x] `isBufferableFrame()` type guard validates frame shape at runtime
+- [x] No `as unknown as` or `as any` casts in serve.ts WS relay paths
+- [x] `WsClientMessage` type derived from Zod schema via `z.infer<>`
+- [x] Adding an optional field to a Zod schema variant without updating the TS type causes a build failure
+- [x] No `as WsClientMessage` cast in ws-protocol.ts
+- [x] CLI subcommands live in `src/cli/*.ts` with a dispatcher in index.tsx
+- [x] index.tsx is <200 lines (dispatcher + arg parsing + shared helpers only)
+- [x] All existing tests continue to pass
 
 ### Verification checklist (Wave 8 — all groups)
-- [ ] DESIGN.md reflects current architecture (Waves 1–7)
-- [ ] CLAUDE.md quick orientation covers all new modules
-- [ ] CHANGELOG covers all security waves
-- [ ] Security narrative complete for external audit
-- [ ] All deferred hardening items from Wave 7 reviews resolved
-- [ ] Zero `as any` or `as unknown as` casts in serve.ts
-- [ ] CLI commands modular and testable
+- [x] DESIGN.md reflects current architecture (Waves 1–7)
+- [x] CLAUDE.md quick orientation covers all new modules
+- [x] CHANGELOG covers all security waves
+- [x] Security narrative complete for external audit
+- [x] All deferred hardening items from Wave 7 reviews resolved
+- [x] Zero `as any` or `as unknown as` casts in serve.ts WS relay paths
+- [x] CLI commands modular and testable
+
+---
+
+## Wave 8.1: Review Fixes — COMPLETE (2026-03-18)
+
+See `PROGRESS.json` for detailed validation. All 16 tasks done, 282 tests pass (1 skip).
+
+Fixes from 3 independent reviews (security, engineering, architecture) of Wave 8. Cross-validated across all three reviewers. 16 findings total: 3 HIGH, 7 MEDIUM, 6 LOW.
+
+### Group A: HIGH — Must fix
+
+| Task | Files | Description | Sources | Consensus |
+|------|-------|-------------|---------|-----------|
+| W8.1-T01 | `src/index.tsx` | **Dispatcher fall-through** — convert independent `if` blocks to `if/else if` chain or add early returns. Currently relies on `process.exit()` inside imported modules — if any module returns instead of exiting, execution falls through to TUI. | Sec #1, Eng F1, Arch #1 | HIGH (2H, 1M) |
+| W8.1-T02 | `src/serve.ts` | **Frame allowlist-output** — construct new objects with only known fields before relaying IPC frames to WebSocket. Currently all ALLOWED_FRAME_TYPES frames relay verbatim including any extra properties a compromised worker injects. Apply to both bufferable and non-bufferable relay paths. | Sec #2, Eng #1, Arch #1 | HIGH (1H, 2M) |
+| W8.1-T03 | `src/cli/credentials.ts`, `src/cli/preflight.ts` | **Remove `as any` casts in credential grant iteration** — use the Zod-inferred grant type from `manifest.ts` instead of `(grant as any).keys`. Could mask schema changes in security CLI tools. | Arch #6, Sec cross-val HIGH, Eng #4 | HIGH (1H, 2M) |
+
+### Group B: MEDIUM — Should fix
+
+| Task | Files | Description | Sources | Consensus |
+|------|-------|-------------|---------|-----------|
+| W8.1-T04 | `docs/security.md` | **Fix stale `_AssertZodMatchesTs` reference** — update to describe the `z.infer<>` derivation mechanism that replaced the bidirectional assertion. | Sec #3, Eng F8, Arch #4 | MED (3M) |
+| W8.1-T05 | `src/serve.ts`, `src/types/ws.ts` | **Type `safeSend` as `WsServerMessage`** — add `WsWarning` type, add `retryAfter?` to `WsError`, add `WsPong` type. Prevents protocol drift at compile time. Pre-existing but Wave 8 should have caught it. | Arch #2, Eng #2, Sec #8 | MED (1H, 1M, 1I) |
+| W8.1-T06 | `src/cli/run.ts` | **Replace `as any` casts in `streamToStdout`** — use `extractSdkEvent()` from `sdk-stream.ts` instead of raw `(msg as any).event` casts. Wave 6 built this abstraction for exactly this purpose. | Arch #8, Eng #5, Sec cross-val LOW | MED (2M, 1L) |
+| W8.1-T07 | `docs/security-model.md` | **Update or deprecate** — either update to match security.md (add Layers 9-10, process isolation, WS protocol safety) or replace contents with a pointer to security.md. | Arch #7, Sec cross-val MED, Eng #6 | MED (3M) |
+| W8.1-T08 | `src/serve.ts` | **Wrap `ws.close()` in try/catch** at auth failure (line ~888) and rate limit (line ~916) paths — consistent with token revocation path. | Eng F3, Sec cross-val HIGH, Arch cross-val LOW | MED (1H, 1M, 1L) |
+| W8.1-T09 | `src/index.tsx` | **Unknown subcommand handling** — check if `args[0]` is a recognized command before falling through to TUI. Print usage hint for unrecognized positional args. `mastersof-ai access` (missing subcommand) silently launching TUI is confusing. | Arch #10, Sec cross-val MED, Eng #10 | MED (1M, 2L) |
+| W8.1-T10 | `src/index.tsx`, `src/cli/access.ts` | **`--agents` explicit or warn** — require `--agents` flag or print prominent warning when defaulting to wildcard `*`. Maximum access by default violates least-privilege. | Sec #6, Arch cross-val MED, Eng #8 | MED (1M, 2L) |
+
+### Group C: LOW — Improve
+
+| Task | Files | Description | Sources | Consensus |
+|------|-------|-------------|---------|-----------|
+| W8.1-T11 | `src/serve.ts`, `src/ipc-protocol.ts` | **Move `isBufferableFrame` to `ipc-protocol.ts`** — co-locate with `ALLOWED_FRAME_TYPES`. Note: creates dependency from IPC to WS types. | Arch #3, Sec cross-val MED, Eng LOW | LOW (1M, 1M, 1L) |
+| W8.1-T12 | `src/cli/access.ts` | **Validate `--name` parameter** — use `validateName` from path-safety at creation time, not first connection. | Sec #5, Arch cross-val LOW, Eng #8 | LOW (3L) |
+| W8.1-T13 | `src/cli/preflight.ts` | **Remove dead `buildOptions` import** | Sec #7, Eng #9, Arch #5 | LOW (3L) |
+| W8.1-T14 | `CLAUDE.md` | **Add CLI subcommand examples** to Running Locally section | Arch #11, Sec #8, Eng #11 | LOW (3L) |
+| W8.1-T15 | `src/types/ws.ts` | **Add `retryAfter?` to `WsError`** — symptom of T05, fix alongside it | Sec #4, Arch #6 | LOW (covered by T05) |
+| W8.1-T16 | — | **Shared CLI context type** — deferred. Not actionable at 10 modules. Revisit if CLI grows past 15 commands. | Arch #5, Sec DISAGREE, Eng LOW | LOW (deferred) |
+
+### Dependencies
+- W8.1-T02 depends on W8.1-T11 if we move isBufferableFrame first (or do both together)
+- W8.1-T05 and W8.1-T15 should be done together (safeSend typing + WsError field)
+- All others are independent
+
+### Verification checklist (Wave 8.1)
+- [x] Dispatcher uses `if/else if` or early returns — no fall-through possible
+- [x] IPC frames relay only known fields to WebSocket (no extra-property passthrough)
+- [x] Zero `as any` casts in credentials.ts, preflight.ts, run.ts
+- [x] `safeSend` typed as `WsServerMessage` — protocol drift caught at compile time
+- [x] `WsWarning`, `WsPong` types added to WsServerMessage union
+- [x] `ws.close()` wrapped in try/catch at all call sites
+- [x] Unknown subcommands print usage error instead of launching TUI
+- [x] `--agents` flag required or warns on wildcard default
+- [x] docs/security.md describes `z.infer<>` mechanism (no `_AssertZodMatchesTs` reference)
+- [x] docs/security-model.md updated with Layers 9-10, process isolation
+- [x] `isBufferableFrame` co-located with `ALLOWED_FRAME_TYPES` in ipc-protocol.ts
+- [x] `access create --name` validated with `validateName`
+- [x] Dead imports removed
+- [x] CLAUDE.md has CLI subcommand examples
+- [x] All existing tests continue to pass (282 pass, 0 fail, 1 skip)
+- [x] TypeScript compiles with zero errors

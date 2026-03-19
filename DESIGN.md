@@ -24,6 +24,21 @@ IDENTITY.md --> System prompt assembly --> Claude Agent SDK (query/streaming)
                        Token auth, rate limits,
                        per-user isolation,
                        cost caps, hot reload
+
+Security layers (Waves 1-7):
+
+  Inbound          Runtime               Outbound
+  --------         --------              ---------
+  rate-limit.ts    env-safety.ts         egress-proxy.ts
+  ws-protocol.ts   content-safety.ts     url-safety.ts (SSRF)
+  query-mutex.ts   credentials.ts        cost.ts (budgets)
+                   privacy.ts (LGPD)
+
+  Process isolation              Observability
+  ------------------             -------------
+  ipc-protocol.ts                health.ts
+  session-worker.ts              sdk-stream.ts
+  worker-manager.ts
 ```
 
 ## Key Files
@@ -41,6 +56,13 @@ IDENTITY.md --> System prompt assembly --> Claude Agent SDK (query/streaming)
 | TUI | `src/components/` (React/Ink -- do not touch unless broken) |
 | Config | `~/.mastersof-ai/config.yaml` |
 | Auth | `~/.mastersof-ai/access.yaml` |
+| Security | `src/env-safety.ts`, `src/url-safety.ts`, `src/content-safety.ts` |
+| Credentials | `src/credentials.ts` + `src/egress-proxy.ts` |
+| Process isolation | `src/ipc-protocol.ts`, `src/session-worker.ts`, `src/worker-manager.ts` |
+| WS protocol | `src/ws-protocol.ts`, `src/sdk-stream.ts`, `src/query-mutex.ts` |
+| Health/observability | `src/health.ts`, `src/rate-limit.ts`, `src/cost.ts` |
+| Privacy | `src/privacy.ts` (LGPD compliance) |
+| CLI subcommands | `src/cli/` — modular command handlers |
 
 ## Docs
 
@@ -53,6 +75,7 @@ Detailed documentation for each area:
 - **[Configuration](docs/configuration.md)** -- Config file, serve mode, access control, rate limits, privacy
 - **[Secrets](docs/secrets.md)** -- Per-agent encrypted secrets via dotenvx
 - **[Sandbox](docs/sandbox.md)** -- Bubblewrap isolation, per-agent config
+- **[Security](docs/security.md)** -- Security narrative, threat model, hardening layers
 - **[Design Decisions](docs/design-decisions.md)** -- Rationale for key choices
 - **[Changelog](CHANGELOG.md)** -- Version history and notable changes
 
@@ -66,4 +89,11 @@ npx tsx bin/mastersof-ai.js --serve --port 5000      # Custom port
 npx tsx bin/mastersof-ai.js --agent analyst --sandbox # Bubblewrap sandbox
 npx tsx bin/mastersof-ai.js --card                   # Output Agent Card JSON
 npx tsx bin/mastersof-ai.js --list-agents            # List all agents
+
+# CLI subcommands (Wave 8)
+npx tsx bin/mastersof-ai.js run <agent> "message"     # Headless execution
+npx tsx bin/mastersof-ai.js credentials check --agent x # Check credential config
+npx tsx bin/mastersof-ai.js access create --name x      # Generate access token
+npx tsx bin/mastersof-ai.js preflight --agent x         # Validate agent config
+npx tsx bin/mastersof-ai.js status <agent>              # Recent run history
 ```

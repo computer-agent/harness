@@ -2,6 +2,57 @@
 
 All notable changes to the mastersof-ai harness.
 
+## 2026-03-18
+
+### Security Hardening Waves 1–7
+
+Seven waves of defense-in-depth security hardening, culminating in 282 passing tests and zero known critical vulnerabilities.
+
+**Wave 1: Tier 0 Security** — Default bind to 127.0.0.1, shell env allowlist (`src/env-safety.ts`), SSRF URL validation (`src/url-safety.ts`), sandbox read-only mounts, API key hygiene.
+
+**Wave 2: Credential Architecture + Egress** — CredentialStore with per-tool scoping (`src/credentials.ts`), egress domain filtering (`src/egress-proxy.ts`), headless `run` subcommand with runs.jsonl logging, per-user tool deny lists, canUseTool operation allowlists.
+
+**Wave 4: Defense in Depth** — Content boundary tagging for prompt injection defense (`src/content-safety.ts`), SSRF hardening (IPv4-mapped IPv6, hex-short, decimal/octal/hex IP encoding, protocol restriction, redirect chaining), A2A server authentication, WS query param token deprecation, per-user logging.
+
+**Wave 5: Process Isolation + Partner Onboarding** — Fork-per-session workers (`src/session-worker.ts`), IPC protocol (`src/ipc-protocol.ts`), worker lifecycle management (`src/worker-manager.ts`), per-user query serialization (`src/query-mutex.ts`), partner token generation. 15 review fixes: settled-flag race, IPC channel closed recursion, mutex FIFO ordering, fork bomb cap, IPC frame allowlist, execArgv sanitization, hashed rate limiter keys.
+
+**Wave 6: Process Isolation Hardening** — Shared SDK stream processor (`src/sdk-stream.ts`), WebSocket message validation (`src/ws-protocol.ts`), mutex timeout, timing-safe token comparison, worker ready timeout, pending approval cleanup, configurable maxWorkers, worker pool health reporting.
+
+**Wave 7: Review Hardening + Type Safety + Observability** — Exhaustive switch enforcement, Zod↔TypeScript type assertions, ALLOWED_FRAME_TYPES module extraction, safeSend wrapper, worker config minimization, WS schema tightening (content max, lastMessageId max), bounded health arrays, WorkerManager.getStats(), safeCompare JSDoc. CLI DX: `credentials check`, `access create`, `access rotate`, `status`, `preflight`, token rotation.
+
+### Wave 8: Documentation + Deferred Hardening
+
+- CLI subcommands extracted to `src/cli/` modules (index.tsx reduced from 753 to 161 lines)
+- `WsClientMessage` type derived from Zod schema (single source of truth, no bidirectional assertion)
+- Zero bare `ws.send(JSON.stringify(...))` calls in serve.ts — all use `safeSend`
+- `isBufferableFrame()` runtime type guard replaces `as unknown as` casts in WS relay
+- Security narrative documentation for external audit (`docs/security.md`)
+- Architecture docs updated for all new modules
+
+### Wave 8.1: Review Fixes (16 findings from 3 independent reviews)
+
+**HIGH (3):**
+- Dispatcher fall-through: converted independent `if` blocks to `if/else if` chain with `process.exit(0)` safety nets
+- Frame allowlist-output: `sanitizeFrame()` constructs new objects with only known fields before relaying IPC frames to WebSocket — strips extra properties from compromised workers
+- Removed `as any` casts in credential grant iteration — uses Zod-inferred `CredentialGrant` type from manifest.ts
+
+**MEDIUM (7):**
+- `safeSend` typed as `WsServerMessage` — protocol drift caught at compile time
+- New `WsWarning`, `WsPong` types and `retryAfter?` on `WsError`
+- `streamToStdout` uses `extractSdkEvent()` instead of raw `(msg as any).event` casts
+- `safeClose()` wrapper for `ws.close()` at all call sites (auth failure, rate limit, idle timeout, shutdown)
+- Unknown subcommands print usage error instead of silently launching TUI
+- `--agents` flag warns on wildcard default (least-privilege)
+- docs/security-model.md updated with Layers 9-10, process isolation details
+
+**LOW (6):**
+- `isBufferableFrame` moved to ipc-protocol.ts (co-located with `ALLOWED_FRAME_TYPES`)
+- `access create --name` validated with `validateName` at creation time
+- Dead `buildOptions` import removed from preflight.ts
+- CLI subcommand examples added to CLAUDE.md
+- `retryAfter?` added to `WsError` (covered by T05)
+- Shared CLI context type deferred (not actionable at 10 modules)
+
 ## 2026-03-17
 
 ### Web UI: Serve Mode (Phases 1-4)

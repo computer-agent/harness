@@ -143,7 +143,8 @@ async function handleMessage(msg: IpcUserMessage): Promise<void> {
 
   // Tool result callback — sends frame to parent for forwarding
   const onToolResult = (toolId: string, _toolName: string, output: string) => {
-    sendFrame({ type: "tool_result", toolId, content: output });
+    // Review fix #1: tool_result must include id for WsToolResult type conformance
+    sendFrame({ type: "tool_result", id: frameId++, toolId, content: output });
   };
 
   // Remote sandbox policy

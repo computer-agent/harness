@@ -25,6 +25,13 @@ Both share agent loading, tools, sub-agents, sessions, and memory.
 - TUI: `src/components/` — React/Ink (DO NOT TOUCH unless broken)
 - Config: `~/.mastersof-ai/config.yaml`
 - Auth (serve mode): `~/.mastersof-ai/access.yaml`
+- Security: `src/env-safety.ts`, `src/url-safety.ts`, `src/content-safety.ts`
+- Credentials: `src/credentials.ts` + `src/egress-proxy.ts`
+- Process isolation: `src/ipc-protocol.ts`, `src/session-worker.ts`, `src/worker-manager.ts`
+- WS protocol: `src/ws-protocol.ts`, `src/sdk-stream.ts`, `src/query-mutex.ts`
+- Health/observability: `src/health.ts`, `src/rate-limit.ts`, `src/cost.ts`
+- Privacy: `src/privacy.ts` — LGPD compliance
+- CLI subcommands: `src/cli/` — modular command handlers
 
 ## Running Locally
 
@@ -36,4 +43,14 @@ npx tsx bin/mastersof-ai.js --serve --port 5000     # Web UI on custom port
 npx tsx bin/mastersof-ai.js --agent researcher --sandbox  # Bubblewrap sandbox
 npx tsx bin/mastersof-ai.js --card                  # Output Agent Card JSON
 npx tsx bin/mastersof-ai.js --list-agents
+
+# CLI subcommands
+npx tsx bin/mastersof-ai.js run billing "Run monthly billing"           # Headless run
+npx tsx bin/mastersof-ai.js credentials check --agent billing           # Check agent credentials
+npx tsx bin/mastersof-ai.js credentials migrate billing                 # Generate migration YAML
+npx tsx bin/mastersof-ai.js access create --name partner --agents a,b   # Create access token
+npx tsx bin/mastersof-ai.js access rotate --name partner                # Rotate token
+npx tsx bin/mastersof-ai.js status billing                              # Recent run results
+npx tsx bin/mastersof-ai.js preflight --agent billing                   # Validate full config
+npx tsx bin/mastersof-ai.js create my-agent                             # Scaffold new agent
 ```

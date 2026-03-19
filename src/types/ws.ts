@@ -1,43 +1,7 @@
 // ─── Client → Server ───
-
-export interface WsSubscribe {
-  type: "subscribe";
-  agentId: string;
-  sessionId?: string; // Omit for new conversation; provide to resume
-  lastMessageId?: number; // For reconnection: replay messages after this ID
-}
-
-export interface WsMessage {
-  type: "message";
-  content: string;
-}
-
-export interface WsInterrupt {
-  type: "interrupt";
-}
-
-export interface WsPing {
-  type: "ping";
-}
-
-export interface WsToolApprovalResponse {
-  type: "tool_approval";
-  toolId: string;
-  approved: boolean;
-}
-
-export interface WsConsentGranted {
-  type: "consent_granted";
-  policyVersion: string;
-}
-
-export type WsClientMessage =
-  | WsSubscribe
-  | WsMessage
-  | WsInterrupt
-  | WsPing
-  | WsToolApprovalResponse
-  | WsConsentGranted;
+// W8-T07: WsClientMessage is derived from the Zod schema in ws-protocol.ts (single source of truth).
+// Re-exported here so existing imports from types/ws.ts continue to work.
+export type { WsClientMessage } from "../ws-protocol.js";
 
 // ─── Server → Client ───
 
@@ -129,6 +93,8 @@ export interface WsError {
   type: "error";
   code: string;
   message: string;
+  // W8.1-T05/T15: Optional retry-after hint for rate-limited clients
+  retryAfter?: number;
 }
 
 export interface WsStatus {
@@ -138,7 +104,7 @@ export interface WsStatus {
 
 export interface WsResult {
   type: "result";
-  sessionId: string;
+  sessionId: string | null;
   interrupted: boolean;
   usage: {
     inputTokens: number;
@@ -203,6 +169,17 @@ export interface WsRosterUpdated {
   }>;
 }
 
+// W8.1-T05: New types for protocol completeness
+export interface WsWarning {
+  type: "warning";
+  code: string;
+  message: string;
+}
+
+export interface WsPong {
+  type: "pong";
+}
+
 export type WsServerMessage =
   | WsConnected
   | WsSubscribed
@@ -225,4 +202,6 @@ export type WsServerMessage =
   | WsBudgetExceeded
   | WsConsentRequired
   | WsRosterUpdated
-  | WsToolApprovalRejected;
+  | WsToolApprovalRejected
+  | WsWarning
+  | WsPong;

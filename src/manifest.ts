@@ -64,6 +64,9 @@ const CredentialGrantSchema = z.object({
   approval: z.enum(["required"]).optional(),
 });
 
+/** Zod-inferred type for a single credential grant entry. */
+export type CredentialGrant = z.infer<typeof CredentialGrantSchema>;
+
 const CredentialsSchema = z.object({
   grants: z.record(z.string(), CredentialGrantSchema),
 });

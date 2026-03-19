@@ -1,13 +1,14 @@
 /**
  * WebSocket client message schema validation (W6-T05).
  *
- * Validates incoming WS messages against Zod schemas after JSON.parse.
- * Rejects malformed messages with structured errors instead of allowing
- * untyped data to flow through the system.
+ * The Zod schema is the single source of truth for client→server message types.
+ * The TypeScript type `WsClientMessage` is derived from the schema via `z.infer<>`,
+ * so adding a field to the schema automatically updates the TS type — no drift possible.
+ *
+ * W8-T07: Replaced bidirectional assertion (W7-T06) with Zod-derived type.
  */
 
 import { z } from "zod";
-import type { WsClientMessage } from "./types/ws.js";
 
 const WsSubscribeSchema = z.object({
   type: z.literal("subscribe"),
@@ -42,7 +43,7 @@ const WsConsentGrantedSchema = z.object({
   policyVersion: z.string().min(1),
 });
 
-const WsClientMessageSchema = z.discriminatedUnion("type", [
+export const WsClientMessageSchema = z.discriminatedUnion("type", [
   WsSubscribeSchema,
   WsMessageSchema,
   WsInterruptSchema,
@@ -51,17 +52,11 @@ const WsClientMessageSchema = z.discriminatedUnion("type", [
   WsConsentGrantedSchema,
 ]);
 
-// W7-T06: Compile-time assertion that Zod output matches the TypeScript union.
-// If the two diverge (e.g., a new message type added to one but not the other),
-// this assignment fails at build time.
-type ZodOutput = z.output<typeof WsClientMessageSchema>;
-type _AssertZodMatchesTs = ZodOutput extends WsClientMessage
-  ? WsClientMessage extends ZodOutput
-    ? true
-    : never
-  : never;
-const _typeCheck: _AssertZodMatchesTs = true as _AssertZodMatchesTs;
-void _typeCheck;
+/**
+ * W8-T07: WsClientMessage derived from Zod schema — single source of truth.
+ * Adding or changing fields in the schema above automatically updates this type.
+ */
+export type WsClientMessage = z.infer<typeof WsClientMessageSchema>;
 
 export type WsValidationResult = { ok: true; message: WsClientMessage } | { ok: false; error: string; detail: string };
 
@@ -73,7 +68,6 @@ export type WsValidationResult = { ok: true; message: WsClientMessage } | { ok: 
 export function validateWsMessage(raw: unknown): WsValidationResult {
   const result = WsClientMessageSchema.safeParse(raw);
   if (result.success) {
-    // W7-T06: Safe — compile-time assertion above proves ZodOutput === WsClientMessage
     return { ok: true, message: result.data };
   }
   const firstIssue = result.error.issues[0];
