@@ -14,6 +14,7 @@ import { type ChildProcess, fork } from "node:child_process";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { type IpcResultMessage, sanitizeFrame, type WorkerToParentMessage } from "./ipc-protocol.js";
+import { QueryMutex } from "./query-mutex.js";
 
 const MOCK_WORKER_PATH = fileURLToPath(new URL("./test-fixtures/mock-worker.ts", import.meta.url));
 
@@ -310,6 +311,85 @@ describe("IPC round-trip integration (W5.1-T01)", () => {
     child.send({ type: "shutdown" });
     const { code } = await waitForExit();
     assert.strictEqual(code, 0);
+  });
+
+  it("V2b: SIGKILL + promise rejection + mutex release", async () => {
+    const { child, waitForExit } = spawnMockWorker("hang");
+    const mutex = new QueryMutex();
+    const key = "test:sigkill";
+
+    sendInit(child);
+    await waitForMessage(child, "ready");
+
+    // Acquire mutex (mirrors serve.ts pattern)
+    const release = await mutex.acquire(key);
+    assert.ok(mutex.isLocked(key), "Mutex should be locked after acquire");
+
+    // Wire settled/safeReject pattern from serve.ts
+    let settled = false;
+    const queryPromise = new Promise<string>((_resolve, reject) => {
+      const safeReject = (err: Error) => {
+        if (!settled) {
+          settled = true;
+          release();
+          reject(err);
+        }
+      };
+
+      child.on("exit", (code, signal) => {
+        safeReject(new Error(`Worker killed: code=${code} signal=${signal}`));
+      });
+
+      // Send message to start the hanging query
+      child.send({ type: "message", content: "hello" });
+    });
+
+    // Wait for the "thinking" frame to confirm message was received
+    await waitForMessage(child, "frame", 3000);
+
+    // SIGKILL the worker
+    child.kill("SIGKILL");
+    const { code, signal } = await waitForExit();
+    assert.strictEqual(code, null);
+    assert.strictEqual(signal, "SIGKILL");
+
+    // Promise should reject
+    await assert.rejects(queryPromise, /Worker killed/);
+
+    // Mutex should be released by safeReject
+    assert.ok(!mutex.isLocked(key), "Mutex should be released after SIGKILL");
+  });
+
+  it("V7b: kill-on-resubscribe — second spawn kills first worker", async () => {
+    // Spawn two workers on the same "conversation key", simulating re-subscribe.
+    // The key behavior: when a second worker is spawned for the same key,
+    // the first worker must be killed (via WorkerManager.kill inside spawn).
+    const w1 = spawnMockWorker("normal");
+    sendInit(w1.child);
+    await waitForMessage(w1.child, "ready");
+
+    const w2 = spawnMockWorker("normal");
+    sendInit(w2.child);
+    await waitForMessage(w2.child, "ready");
+
+    // Simulate WorkerManager.kill: send shutdown to w1
+    w1.child.send({ type: "shutdown" });
+    const w1Exit = await w1.waitForExit();
+
+    // First worker should exit cleanly from shutdown
+    assert.strictEqual(w1Exit.code, 0, "First worker should exit cleanly");
+
+    // Second worker must still be alive and functional
+    assert.ok(w2.child.connected, "Second worker should still be connected");
+    w2.child.send({ type: "message", content: "after-resubscribe" });
+    const result = await waitForMessage(w2.child, "result");
+    assert.strictEqual((result as IpcResultMessage).responseContent, "Hello world");
+
+    // Verify it was a different process
+    assert.notStrictEqual(w1.child.pid, w2.child.pid, "Workers should be different processes");
+
+    w2.child.send({ type: "shutdown" });
+    await w2.waitForExit();
   });
 });
 

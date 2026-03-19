@@ -17,11 +17,45 @@ import type { WorkerPoolStats } from "./health.js";
 import type { IpcInitMessage, ParentToWorkerMessage, WorkerToParentMessage } from "./ipc-protocol.js";
 import type { Logger } from "./logger.js";
 
-const WORKER_PATH = fileURLToPath(new URL("./session-worker.ts", import.meta.url));
+const DEFAULT_WORKER_PATH = fileURLToPath(new URL("./session-worker.ts", import.meta.url));
 
 const WORKER_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const DEFAULT_MAX_WORKERS = 20;
 const WORKER_READY_TIMEOUT_MS = 30_000; // W6-T06: 30s for worker to send "ready"
+
+/**
+ * Filter process.execArgv to strip --inspect/--debug flags.
+ * Prevents debug port RCE in forked worker processes (F3).
+ */
+export function filterExecArgv(argv: readonly string[]): string[] {
+  return argv.filter((arg) => !arg.startsWith("--inspect") && !arg.startsWith("--debug"));
+}
+
+/**
+ * Build the env dict for a forked worker process.
+ * Pure function — takes buildShellEnv output + explicit overrides, returns a clean env.
+ */
+export function buildWorkerEnv(
+  safeEnv: Record<string, string>,
+  opts: {
+    agentId: string;
+    userId: string;
+    apiKey?: string;
+    home?: string;
+    path?: string;
+    tz?: string;
+  },
+): Record<string, string> {
+  return {
+    ...safeEnv,
+    ...(opts.apiKey ? { ANTHROPIC_API_KEY: opts.apiKey } : {}),
+    HOME: opts.home ?? "/root",
+    PATH: opts.path ?? "/usr/bin:/bin",
+    TZ: opts.tz || Intl.DateTimeFormat().resolvedOptions().timeZone,
+    WORKER_AGENT_ID: opts.agentId,
+    WORKER_USER_ID: opts.userId,
+  };
+}
 
 export type WorkerMessageHandler = (msg: WorkerToParentMessage) => void;
 export type WorkerExitHandler = (code: number | null, signal: string | null) => void;
@@ -49,12 +83,14 @@ export class WorkerManager {
   private readonly workers = new Map<string, InternalWorkerState>();
   private readonly logger: Logger;
   private readonly maxWorkers: number;
+  private readonly workerPath: string;
 
-  constructor(logger: Logger, maxWorkers = DEFAULT_MAX_WORKERS) {
+  constructor(logger: Logger, maxWorkers = DEFAULT_MAX_WORKERS, workerPath = DEFAULT_WORKER_PATH) {
     this.logger = logger;
     // P1-3: Clamp to prevent config typos from breaking serve mode entirely.
     // NaN/undefined/null fall back to default; 0 and negative clamp to 1.
     this.maxWorkers = Math.max(1, Math.floor(Number(maxWorkers)) || DEFAULT_MAX_WORKERS);
+    this.workerPath = workerPath;
   }
 
   /**
@@ -86,21 +122,20 @@ export class WorkerManager {
 
     // W5-T04: Per-worker env injection — only safe vars + agent credentials.
     // ANTHROPIC_API_KEY must pass through (SDK needs it), but nothing else from process.env.
-    const workerEnv: Record<string, string> = {
-      ...safeEnv,
-      ...(process.env.ANTHROPIC_API_KEY ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY } : {}),
-      HOME: process.env.HOME ?? "/root",
-      PATH: process.env.PATH ?? "/usr/bin:/bin",
-      TZ: process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone,
-      WORKER_AGENT_ID: agentId,
-      WORKER_USER_ID: userId,
-    };
+    const workerEnv = buildWorkerEnv(safeEnv, {
+      agentId,
+      userId,
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      home: process.env.HOME,
+      path: process.env.PATH,
+      tz: process.env.TZ,
+    });
 
     // P2-4: Pass parent's execArgv so tsx loader is available in the child.
     // F3: Filter out --inspect/--inspect-brk to prevent debug port RCE in workers.
-    const safeExecArgv = process.execArgv.filter((arg) => !arg.startsWith("--inspect") && !arg.startsWith("--debug"));
+    const safeExecArgv = filterExecArgv(process.execArgv);
 
-    const child = fork(WORKER_PATH, [], {
+    const child = fork(this.workerPath, [], {
       env: workerEnv,
       execArgv: safeExecArgv,
       serialization: "json",

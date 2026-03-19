@@ -354,7 +354,8 @@ describe("QueryMutex stress (W5.1-T02)", () => {
 // ─── W5.1-T03: Security hardening validation ───
 
 describe("Security hardening (W5.1-T03)", () => {
-  it("F3: execArgv filter strips --inspect but preserves --import", () => {
+  it("F3: filterExecArgv strips --inspect but preserves --import", async () => {
+    const { filterExecArgv } = await import("./worker-manager.js");
     const rawArgv = [
       "--require",
       "/path/to/tsx/preflight.cjs",
@@ -364,13 +365,30 @@ describe("Security hardening (W5.1-T03)", () => {
       "--inspect-brk",
       "--debug=5858",
     ];
-    const filtered = rawArgv.filter((arg) => !arg.startsWith("--inspect") && !arg.startsWith("--debug"));
+    const filtered = filterExecArgv(rawArgv);
     assert.deepStrictEqual(filtered, [
       "--require",
       "/path/to/tsx/preflight.cjs",
       "--import",
       "file:///path/to/tsx/loader.mjs",
     ]);
+  });
+
+  it("F3: filterExecArgv strips --inspect-wait and --debug-brk", async () => {
+    const { filterExecArgv } = await import("./worker-manager.js");
+    const argv = ["--inspect-wait=9229", "--debug-brk", "--require", "tsx"];
+    assert.deepStrictEqual(filterExecArgv(argv), ["--require", "tsx"]);
+  });
+
+  it("F3: filterExecArgv returns empty array for empty input", async () => {
+    const { filterExecArgv } = await import("./worker-manager.js");
+    assert.deepStrictEqual(filterExecArgv([]), []);
+  });
+
+  it("F3: filterExecArgv passes through safe flags untouched", async () => {
+    const { filterExecArgv } = await import("./worker-manager.js");
+    const safe = ["--require", "tsx", "--import", "file:///loader.mjs", "--max-old-space-size=4096"];
+    assert.deepStrictEqual(filterExecArgv(safe), safe);
   });
 
   it("F5: rate limit key is a 64-char hex hash, not raw token", () => {
@@ -645,43 +663,49 @@ describe("Worker behavior (W5.1-T04)", () => {
     );
   });
 
-  it("shutdown with no active query: immediate exit pattern", () => {
-    // Verify the shutdown logic pattern from session-worker.ts handleShutdown:
-    // if (!activeQuery) process.exit(0) — immediate exit
-    let exited = false;
-    const activeQuery = null;
+  it("T04-V3: fork mock-worker with filterExecArgv, verify ready arrives", async () => {
+    const { filterExecArgv } = await import("./worker-manager.js");
+    const { fork } = await import("node:child_process");
+    const { fileURLToPath } = await import("node:url");
 
-    // Simulate handleShutdown logic
-    if (activeQuery) {
-      // Would interrupt and set timeout
-    } else {
-      exited = true; // Represents process.exit(0)
-    }
+    const workerPath = fileURLToPath(new URL("./test-fixtures/mock-worker.ts", import.meta.url));
+    const safeArgv = filterExecArgv(process.execArgv);
 
-    assert.ok(exited, "No active query → should exit immediately");
-  });
+    const child = fork(workerPath, [], {
+      env: { ...process.env, MOCK_WORKER_MODE: "shutdown_idle" },
+      execArgv: safeArgv,
+      serialization: "json",
+      stdio: ["ignore", "inherit", "inherit", "ipc"],
+    });
 
-  it("shutdown during query: interrupt + 5s grace period pattern", () => {
-    // Verify the shutdown logic pattern from session-worker.ts handleShutdown:
-    // if (activeQuery) { activeQuery.interrupt(); setTimeout(exit, 5000); }
-    let interrupted = false;
-    let graceTimeoutSet = false;
-    const activeQuery = {
-      interrupt: () => {
-        interrupted = true;
-      },
-    };
+    // Send init message (mock-worker requires this before it sends "ready")
+    child.send({
+      type: "init",
+      agentId: "test",
+      userId: "test-user",
+      configJson: "{}",
+      accessUser: { name: "test-user", toolsDeny: [] },
+    });
 
-    // Simulate handleShutdown logic
-    if (activeQuery) {
-      activeQuery.interrupt();
-      interrupted = true;
-      // setTimeout(() => process.exit(0), 5000) — we just verify the pattern
-      graceTimeoutSet = true;
-    }
+    const ready = await new Promise<boolean>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Timeout waiting for ready")), 5000);
+      child.on("message", (raw: unknown) => {
+        const msg = raw as { type: string };
+        if (msg?.type === "ready") {
+          clearTimeout(timer);
+          resolve(true);
+        }
+      });
+      child.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+    assert.ok(ready, "Worker should send ready message");
 
-    assert.ok(interrupted, "Active query should be interrupted");
-    assert.ok(graceTimeoutSet, "5s grace period timeout should be set");
+    // Clean shutdown
+    child.send({ type: "shutdown" });
+    await new Promise<void>((resolve) => child.on("exit", () => resolve()));
   });
 
   it("shutdown resolves pending tool approvals with denial", () => {
@@ -712,7 +736,6 @@ describe("Worker behavior (W5.1-T04)", () => {
 
 describe("Worker environment isolation (W5.1-T05)", () => {
   it("buildShellEnv only includes safe system vars + agent env", async () => {
-    // Dynamic import to match ESM
     const { buildShellEnv } = await import("./env-safety.js");
 
     const agentEnv = { MY_API_KEY: "secret123", DB_URL: "postgres://..." };
@@ -734,48 +757,73 @@ describe("Worker environment isolation (W5.1-T05)", () => {
     assert.strictEqual(safe2.ANTHROPIC_API_KEY, "sk-ant-test");
   });
 
-  it("worker env construction includes only expected keys", () => {
-    // Simulate the env construction from worker-manager.ts
-    const _agentEnv = { BRAINTREE_KEY: "bt-123" };
-    const safeEnv = { HOME: "/root", PATH: "/usr/bin", BRAINTREE_KEY: "bt-123" }; // buildShellEnv result
+  it("buildWorkerEnv includes expected keys from safeEnv + opts", async () => {
+    const { buildWorkerEnv } = await import("./worker-manager.js");
 
-    const workerEnv: Record<string, string> = {
-      ...safeEnv,
-      ANTHROPIC_API_KEY: "sk-test",
-      HOME: "/root",
-      PATH: "/usr/bin:/bin",
-      TZ: "UTC",
-      WORKER_AGENT_ID: "billing",
-      WORKER_USER_ID: "alice",
-    };
+    const safeEnv = { HOME: "/root", PATH: "/usr/bin", BRAINTREE_KEY: "bt-123" };
+    const env = buildWorkerEnv(safeEnv, {
+      agentId: "billing",
+      userId: "alice",
+      apiKey: "sk-test",
+      home: "/home/user",
+      path: "/usr/local/bin:/usr/bin",
+      tz: "America/New_York",
+    });
 
-    // Expected keys present
-    assert.ok("ANTHROPIC_API_KEY" in workerEnv);
-    assert.ok("BRAINTREE_KEY" in workerEnv);
-    assert.ok("WORKER_AGENT_ID" in workerEnv);
-    assert.ok("WORKER_USER_ID" in workerEnv);
+    // safeEnv keys pass through
+    assert.strictEqual(env.BRAINTREE_KEY, "bt-123");
+
+    // Explicit opts override safeEnv
+    assert.strictEqual(env.ANTHROPIC_API_KEY, "sk-test");
+    assert.strictEqual(env.HOME, "/home/user");
+    assert.strictEqual(env.PATH, "/usr/local/bin:/usr/bin");
+    assert.strictEqual(env.TZ, "America/New_York");
+    assert.strictEqual(env.WORKER_AGENT_ID, "billing");
+    assert.strictEqual(env.WORKER_USER_ID, "alice");
 
     // Unexpected keys absent
-    assert.ok(!("DATABASE_URL" in workerEnv));
-    assert.ok(!("AWS_SECRET_ACCESS_KEY" in workerEnv));
-    assert.ok(!("NODE_ENV" in workerEnv));
+    assert.ok(!("DATABASE_URL" in env));
+    assert.ok(!("AWS_SECRET_ACCESS_KEY" in env));
+    assert.ok(!("NODE_ENV" in env));
   });
 
-  it("missing ANTHROPIC_API_KEY is omitted, not empty string", () => {
-    const workerEnv: Record<string, string> = {
-      HOME: "/root",
-      PATH: "/usr/bin",
-      TZ: "UTC",
-      // No ANTHROPIC_API_KEY
-    };
+  it("buildWorkerEnv omits ANTHROPIC_API_KEY when apiKey is undefined", async () => {
+    const { buildWorkerEnv } = await import("./worker-manager.js");
 
-    // Simulate the conditional from worker-manager.ts
-    const apiKey = undefined; // process.env.ANTHROPIC_API_KEY when unset
-    if (apiKey) {
-      workerEnv.ANTHROPIC_API_KEY = apiKey;
-    }
+    const env = buildWorkerEnv(
+      {},
+      {
+        agentId: "test",
+        userId: "bob",
+        // apiKey intentionally omitted
+      },
+    );
 
-    assert.ok(!("ANTHROPIC_API_KEY" in workerEnv));
+    assert.ok(!("ANTHROPIC_API_KEY" in env));
+    assert.strictEqual(env.WORKER_AGENT_ID, "test");
+    assert.strictEqual(env.WORKER_USER_ID, "bob");
+    // Defaults kick in
+    assert.strictEqual(env.HOME, "/root");
+    assert.strictEqual(env.PATH, "/usr/bin:/bin");
+    assert.ok(env.TZ && env.TZ.length > 0, "TZ should have Intl fallback");
+  });
+
+  it("buildWorkerEnv defaults HOME/PATH/TZ when opts are missing", async () => {
+    const { buildWorkerEnv } = await import("./worker-manager.js");
+
+    const env = buildWorkerEnv(
+      { CUSTOM: "val" },
+      {
+        agentId: "a",
+        userId: "u",
+      },
+    );
+
+    assert.strictEqual(env.HOME, "/root");
+    assert.strictEqual(env.PATH, "/usr/bin:/bin");
+    assert.strictEqual(env.CUSTOM, "val");
+    // TZ falls back to Intl
+    assert.ok(typeof env.TZ === "string" && env.TZ.length > 0);
   });
 });
 
