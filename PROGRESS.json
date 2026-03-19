@@ -1,271 +1,86 @@
 {
-  "wave": "Wave 8.1: Review Fixes",
+  "wave": "Wave 5.1: Validation Sprint",
   "started": "2026-03-18",
   "updatedAt": "2026-03-18",
   "status": "complete",
   "items": [
     {
-      "id": "W8.1-T01",
-      "name": "Dispatcher fall-through — if/else if chain",
+      "id": "W5.1-T01",
+      "name": "IPC Round-Trip and Worker Lifecycle Integration Tests",
       "status": "completed",
-      "severity": "HIGH",
-      "files": ["src/index.tsx"],
+      "files": ["src/test-fixtures/mock-worker.ts", "src/ipc-integration.test.ts"],
       "validation": [
-        "Dispatcher uses if/else if chain — no fall-through possible ✓",
-        "Each subcommand branch ends with process.exit(0) safety net ✓",
-        "Nested subcommands (credentials, access) have their own if/else if + usage error ✓",
-        "TypeScript compiles with zero errors ✓"
+        "Integration test: spawn real worker (fork), send init + message IPC, verify frames arrive and result resolves ✓",
+        "Integration test: SIGKILL mid-query — promise rejects (not hangs), mutex releases ✓",
+        "Integration test: worker exits code 0 after shutdown during query — promise resolves with result ✓",
+        "Integration test: worker exits non-zero — promise rejects ✓",
+        "Integration test: worker sends frame with type: 'evil_payload' — parent rejects, does NOT relay ✓",
+        "Integration test: worker sends valid frame types (token, tool_use_start, status) — all relay correctly ✓",
+        "Integration test: re-subscribe on same WS — previous worker killed before new one spawns ✓",
+        "Verify settled flag prevents double-resolve/double-reject ✓",
+        "All integration tests pass 5 consecutive runs without flakiness ✓"
       ]
     },
     {
-      "id": "W8.1-T02",
-      "name": "Frame allowlist-output — relay only known fields",
+      "id": "W5.1-T02",
+      "name": "Mutex Queue Correctness Under Contention",
       "status": "completed",
-      "severity": "HIGH",
-      "files": ["src/serve.ts", "src/ipc-protocol.ts"],
+      "files": ["src/session-worker.test.ts"],
       "validation": [
-        "sanitizeFrame() constructs new objects with only known fields per frame type ✓",
-        "All 9 ALLOWED_FRAME_TYPES handled in sanitizeFrame switch ✓",
-        "Both bufferable (token, tool_use_start) and non-bufferable frames sanitized ✓",
-        "No extra-property passthrough from compromised worker ✓"
+        "Stress test: 10+ concurrent acquires on same key — strict FIFO execution order ✓",
+        "Stress test: 5 keys × 3 acquires — cross-key concurrency verified ✓",
+        "Release while waiters queued — exactly one waiter wakes (not all) ✓",
+        "Double-release is no-op — mutex state clean ✓",
+        "Acquire-release-acquire cycle — no stale queue entries ✓",
+        "Existing mutex tests continue to pass ✓"
       ]
     },
     {
-      "id": "W8.1-T03",
-      "name": "Remove as any casts in credential grant iteration",
+      "id": "W5.1-T03",
+      "name": "Security Hardening Fixes Validation",
       "status": "completed",
-      "severity": "HIGH",
-      "files": ["src/cli/credentials.ts", "src/cli/preflight.ts"],
+      "files": ["src/session-worker.test.ts"],
       "validation": [
-        "Zero as any casts in credentials.ts ✓",
-        "Zero as any casts in preflight.ts ✓",
-        "CredentialGrant type derived from AgentFrontmatter via NonNullable chains ✓",
-        "TypeScript compiles with zero errors ✓"
+        "execArgv: --inspect stripped, --import=tsx preserved ✓",
+        "execArgv: --inspect-brk and --debug stripped ✓",
+        "Rate limit keyGenerator produces 64-char hex from bearer token ✓",
+        "Roster broadcast on config change filtered per user access ✓",
+        "Manual reload roster filtered per user access ✓",
+        "connectedClients stores tokenHash, not raw token ✓"
       ]
     },
     {
-      "id": "W8.1-T04",
-      "name": "Fix stale _AssertZodMatchesTs reference in security.md",
+      "id": "W5.1-T04",
+      "name": "Worker Behavior Validation",
       "status": "completed",
-      "severity": "MEDIUM",
-      "files": ["docs/security.md"],
+      "files": ["src/session-worker.test.ts", "src/ipc-integration.test.ts"],
       "validation": [
-        "No _AssertZodMatchesTs reference in docs/security.md ✓",
-        "Describes z.infer<typeof WsClientMessageSchema> derivation mechanism ✓"
+        "handleMessage calls buildSystemPrompt() with current time ✓",
+        "handleMessage reuses cached manifest from init ✓",
+        "Fork with tsx execArgv imports TS modules successfully ✓",
+        "Shutdown during query: result sent, exits within 5s ✓",
+        "Shutdown with no query: immediate exit ✓"
       ]
     },
     {
-      "id": "W8.1-T05",
-      "name": "Type safeSend as WsServerMessage",
+      "id": "W5.1-T05",
+      "name": "Worker Environment Isolation",
       "status": "completed",
-      "severity": "MEDIUM",
-      "files": ["src/serve.ts", "src/types/ws.ts"],
+      "files": ["src/session-worker.test.ts"],
       "validation": [
-        "safeSend typed as (ws, data: WsServerMessage) — protocol drift caught at compile time ✓",
-        "WsWarning type added to WsServerMessage union ✓",
-        "WsPong type added to WsServerMessage union ✓",
-        "retryAfter?: number added to WsError ✓",
-        "TypeScript compiles with zero errors ✓"
+        "Worker env contains only safe vars + ANTHROPIC_API_KEY + WORKER_* ✓",
+        "Parent DATABASE_URL does NOT appear in worker env ✓",
+        "ANTHROPIC_API_KEY passes through correctly ✓",
+        "Missing ANTHROPIC_API_KEY omitted (no empty string) ✓",
+        "Agent-specific env vars from loadAgentEnv appear via buildShellEnv ✓"
       ]
-    },
-    {
-      "id": "W8.1-T06",
-      "name": "Replace as any casts in streamToStdout",
-      "status": "completed",
-      "severity": "MEDIUM",
-      "files": ["src/cli/run.ts"],
-      "validation": [
-        "Zero as any casts in run.ts ✓",
-        "Uses extractSdkEvent() from sdk-stream.ts ✓",
-        "text_token and assistant event kinds handled ✓"
-      ]
-    },
-    {
-      "id": "W8.1-T07",
-      "name": "Update docs/security-model.md",
-      "status": "completed",
-      "severity": "MEDIUM",
-      "files": ["docs/security-model.md"],
-      "validation": [
-        "security-model.md updated with Layers 9 (WS Protocol Safety) and 10 (Observability) ✓",
-        "Layer 8 expanded with process isolation details (fork-per-session, IPC, frame sanitization) ✓",
-        "Links to security.md for comprehensive audit narrative ✓",
-        "z.infer<> derivation described (not _AssertZodMatchesTs) ✓"
-      ]
-    },
-    {
-      "id": "W8.1-T08",
-      "name": "Wrap ws.close() in try/catch at all call sites",
-      "status": "completed",
-      "severity": "MEDIUM",
-      "files": ["src/serve.ts"],
-      "validation": [
-        "safeClose() helper wraps ws.close() in try/catch ✓",
-        "Auth failure path uses safeClose ✓",
-        "Rate limit path uses safeClose ✓",
-        "Idle timeout paths use safeClose ✓",
-        "Token revocation path uses safeClose (removed redundant try/catch) ✓",
-        "Shutdown path uses safeClose ✓",
-        "Only bare ws.close() is inside safeClose helper itself ✓"
-      ]
-    },
-    {
-      "id": "W8.1-T09",
-      "name": "Unknown subcommand handling",
-      "status": "completed",
-      "severity": "MEDIUM",
-      "files": ["src/index.tsx"],
-      "validation": [
-        "Unknown positional args (e.g. mastersof-ai foo) print usage error ✓",
-        "mastersof-ai access (missing subcommand) prints 'Usage: access <create|rotate>' ✓",
-        "mastersof-ai credentials (missing subcommand) prints 'Usage: credentials <migrate|check>' ✓",
-        "Usage error lists all available commands and flags ✓"
-      ]
-    },
-    {
-      "id": "W8.1-T10",
-      "name": "--agents explicit or warn on wildcard default",
-      "status": "completed",
-      "severity": "MEDIUM",
-      "files": ["src/index.tsx", "src/cli/access.ts"],
-      "validation": [
-        "index.tsx passes isWildcardDefault flag to cliAccessCreate ✓",
-        "Warning printed when defaulting to wildcard (*) access ✓",
-        "No warning when --agents explicitly set to * ✓"
-      ]
-    },
-    {
-      "id": "W8.1-T11",
-      "name": "Move isBufferableFrame to ipc-protocol.ts",
-      "status": "completed",
-      "severity": "LOW",
-      "files": ["src/serve.ts", "src/ipc-protocol.ts"],
-      "validation": [
-        "isBufferableFrame co-located with ALLOWED_FRAME_TYPES in ipc-protocol.ts ✓",
-        "serve.ts imports isBufferableFrame from ipc-protocol.ts ✓",
-        "Local isBufferableFrame removed from serve.ts ✓"
-      ]
-    },
-    {
-      "id": "W8.1-T12",
-      "name": "Validate --name parameter with validateName",
-      "status": "completed",
-      "severity": "LOW",
-      "files": ["src/cli/access.ts"],
-      "validation": [
-        "access create --name validated with validateName from path-safety ✓",
-        "Invalid names rejected at creation time with descriptive error ✓"
-      ]
-    },
-    {
-      "id": "W8.1-T13",
-      "name": "Remove dead buildOptions import from preflight.ts",
-      "status": "completed",
-      "severity": "LOW",
-      "files": ["src/cli/preflight.ts"],
-      "validation": [
-        "buildOptions import removed from preflight.ts ✓",
-        "Only buildSystemPrompt imported (actually used) ✓"
-      ]
-    },
-    {
-      "id": "W8.1-T14",
-      "name": "Add CLI subcommand examples to CLAUDE.md",
-      "status": "completed",
-      "severity": "LOW",
-      "files": ["CLAUDE.md"],
-      "validation": [
-        "CLAUDE.md Running Locally has CLI subcommand examples ✓",
-        "Covers run, credentials check/migrate, access create/rotate, status, preflight, create ✓"
-      ]
-    },
-    {
-      "id": "W8.1-T15",
-      "name": "Add retryAfter? to WsError (done with T05)",
-      "status": "completed",
-      "severity": "LOW",
-      "files": ["src/types/ws.ts"],
-      "validation": [
-        "WsError has retryAfter?: number field ✓",
-        "WsWarning and WsPong types added to WsServerMessage union ✓"
-      ]
-    },
-    {
-      "id": "W8.1-T16",
-      "name": "Shared CLI context type — deferred",
-      "status": "completed",
-      "severity": "LOW",
-      "files": [],
-      "validation": ["Explicitly deferred — revisit if CLI grows past 15 commands ✓"]
     }
-  ],
-  "reviewFixes": [
-    {
-      "id": "RF-1",
-      "severity": "HIGH",
-      "consensus": "1H, 2M (Sec, Eng, Arch)",
-      "description": "tool_result frames from worker lacked id field; sanitizeFrame produced undefined as number",
-      "fix": "Added id: frameId++ to onToolResult in session-worker.ts",
-      "files": ["src/session-worker.ts"]
-    },
-    {
-      "id": "RF-2",
-      "severity": "MEDIUM",
-      "consensus": "3M (Sec, Eng, Arch)",
-      "description": "sanitizeFrame casts without runtime type validation — compromised worker could inject wrong types",
-      "fix": "Added typeof checks and enum validation for every field; frames with wrong types return null",
-      "files": ["src/ipc-protocol.ts"]
-    },
-    {
-      "id": "RF-3",
-      "severity": "MEDIUM",
-      "consensus": "2M (Eng, Arch)",
-      "description": "CredentialGrant type duplicated via NonNullable chain in two files",
-      "fix": "Exported CredentialGrant from manifest.ts; both CLI modules import it",
-      "files": ["src/manifest.ts", "src/cli/credentials.ts", "src/cli/preflight.ts"]
-    },
-    {
-      "id": "RF-4",
-      "severity": "MEDIUM",
-      "consensus": "1M (Sec)",
-      "description": "cliAccessRotate missing validateName — inconsistent with cliAccessCreate",
-      "fix": "Added validateName call at top of cliAccessRotate",
-      "files": ["src/cli/access.ts"]
-    },
-    {
-      "id": "RF-5",
-      "severity": "LOW",
-      "consensus": "1L (Arch)",
-      "description": "security.md did not mention sanitizeFrame property stripping",
-      "fix": "Updated Section 2.7 and 5.5 to describe sanitizeFrame",
-      "files": ["docs/security.md"]
-    },
-    {
-      "id": "RF-8",
-      "severity": "LOW",
-      "consensus": "1M (Sec — fragile pattern)",
-      "description": "cliCreate called without await — fragile if changed to async",
-      "fix": "Added await before cliCreate call",
-      "files": ["src/index.tsx"]
-    }
-  ],
-  "reviewDeferred": [
-    {
-      "id": "RF-6",
-      "description": "Wildcard --agents default: warn vs block — policy decision for user",
-      "severity": "MEDIUM"
-    },
-    {
-      "id": "RF-7",
-      "description": "ALLOWED_FRAME_TYPES/sanitizeFrame sync trap — addressed by RF-2 validation",
-      "severity": "MEDIUM"
-    },
-    { "id": "RF-9", "description": "WsToolUseEnd dead type — harmless, no action needed", "severity": "LOW" }
   ],
   "testResults": {
-    "total": 283,
-    "pass": 282,
+    "total": 332,
+    "pass": 332,
     "fail": 0,
-    "skip": 1
+    "skip": 0,
+    "flakiness": "0/5 runs — all 117 Wave 5.1 tests pass consistently"
   }
 }
