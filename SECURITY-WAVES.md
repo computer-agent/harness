@@ -252,19 +252,123 @@ See `PROGRESS.json` for detailed validation. All 9 tasks done, 264 tests pass (2
 
 ---
 
-## Wave 7: Observability + CLI DX — ongoing
+## Wave 7: Review Hardening + Type Safety + Observability — NOT STARTED
 
-| Task | Description |
-|------|-------------|
-| W7-T01 | `mastersof-ai credentials check --agent <name>` |
-| W7-T02 | `mastersof-ai access create --name <name> --agents <list>` |
-| W7-T03 | `mastersof-ai status <agent>` (reads runs.jsonl) |
-| W7-T04 | `mastersof-ai preflight --agent <name>` (validate full config) |
-| W7-T05 | Token rotation mechanism in access.yaml |
+Incorporates all deferred findings from Wave 6 security/engineering/architecture reviews, plus CLI DX. Organized into four groups: stream processor refinements, type system hardening, worker/serve robustness, and observability.
 
-## Wave 8: Documentation Polish — ongoing
+### Dependencies
+- W7-T09 depends on W7-T06 (safeSend helper needed for worker message relay)
+- W7-T14 depends on W7-T13 (health prune uses same timer pattern)
+- All others are independent
+
+---
+
+### Group A: SDK Stream Processor Refinements
+
+| Task | Files | Description | Source |
+|------|-------|-------------|--------|
+| W7-T01 | `src/sdk-stream.ts`, `src/components/App.tsx`, `src/session-worker.ts`, tests | Rename `tool_block_stop` → `content_block_stop` — event fires for ALL content block types (text, tool, thinking), not just tools. Rename the event kind, update both consumers. App.tsx already guards on `inToolUseRef`, so behavior is unchanged. | Sec L1, Eng P2-4 |
+| W7-T02 | `src/sdk-stream.ts` | Document `kind` discriminant choice — add comment explaining why `kind` (not `type`) is used, to prevent a future contributor from "fixing" it to match IPC/WS conventions. | Arch #8 |
+| W7-T03 | `src/sdk-stream.ts`, `src/session-worker.ts` | Fix `tool_input_delta` toolId extraction — `contentBlock?.id` may not exist on delta events. Return `null` when toolId would be empty instead of producing orphan frames. Session-worker.ts should track the active toolId from `tool_use_start` and use it for input deltas. | Sec L2, Eng P2-5, Arch #3 |
+| W7-T04 | `src/session-worker.ts` | Promote `frameId` to module scope — currently resets to 0 per message, breaking reconnection replay after the first turn. `MessageBuffer.since(lastMessageId)` returns nothing when IDs restart. Make it a persistent counter across messages. | Sec L3 |
+| W7-T05 | `src/session-worker.ts` | Guard result send after error — on query error, worker sends both an error IPC and a result IPC. The settled flag makes this harmless, but it's wasteful. Add a `hadError` flag to skip the result send. | Eng P3-11 |
+
+#### Group A validation
+- [ ] `content_block_stop` is the event kind name (not `tool_block_stop`)
+- [ ] App.tsx and session-worker.ts handle `content_block_stop` correctly
+- [ ] `sdk-stream.ts` has comment explaining `kind` vs `type` choice
+- [ ] `tool_input_delta` returns `null` when toolId is absent (not empty string)
+- [ ] Session-worker.ts tracks active toolId from `tool_use_start` for input delta frames
+- [ ] `frameId` is module-scoped in session-worker.ts, monotonically increasing across messages
+- [ ] Worker does not send result IPC after sending error IPC
+
+---
+
+### Group B: Type System Hardening
+
+| Task | Files | Description | Source |
+|------|-------|-------------|--------|
+| W7-T06 | `src/ws-protocol.ts`, `src/types/ws.ts` | Single source of truth for WS client types — add compile-time assertion that Zod schema output matches the TypeScript `WsClientMessage` union. If they diverge, the build fails. Remove the `as WsClientMessage` cast. | Arch #1 |
+| W7-T07 | `src/session-worker.ts`, `src/components/App.tsx` | Exhaustive switch enforcement — add `default: { const _: never = event; }` to both `SdkEvent` switch statements so new event kinds cause compile errors if unhandled. | Arch #5 |
+| W7-T08 | `src/serve.ts`, `src/ipc-protocol.ts` | Extract `ALLOWED_FRAME_TYPES` to module scope — move from the `handleMessage` closure to a module-level `const` in `ipc-protocol.ts`, co-located with the frame type definitions. Makes it auditable and avoids per-call reconstruction. | Arch #6 |
+| W7-T09 | `src/serve.ts` | Eliminate residual `as any` cast — `messageBuffer.push(frame as any)` contradicts W6-T01's goal. After the frame passes `ALLOWED_FRAME_TYPES`, narrow the type precisely (e.g., `as WsToken | WsToolUseStart`). | Arch #4 |
+
+#### Group B validation
+- [ ] Build fails if Zod schema and `WsClientMessage` union diverge
+- [ ] No `as WsClientMessage` cast in ws-protocol.ts
+- [ ] Both SdkEvent switch statements have exhaustive `never` check
+- [ ] Adding a new SdkEvent kind without handling it causes a compile error
+- [ ] `ALLOWED_FRAME_TYPES` lives in `ipc-protocol.ts` at module scope
+- [ ] No `as any` casts in serve.ts messageBuffer.push
+
+---
+
+### Group C: Worker/Serve Robustness
+
+| Task | Files | Description | Source |
+|------|-------|-------------|--------|
+| W7-T10 | `src/serve.ts` | `safeSend` wrapper — create `safeSend(ws, data)` helper that wraps `ws.send(JSON.stringify(data))` in try/catch. Replace bare `ws.send` calls in post-processing, error paths, and approval cleanup. Prevents cascading throws on closed sockets. | Eng P2-6 |
+| W7-T11 | `src/worker-manager.ts`, `src/session-worker.ts` | Minimize worker config exposure — send only the config subset the worker needs (model, effort, tools, hooks, logging level) instead of the full `HarnessConfig`. Reduces information exposure if a worker is compromised. | Sec L6 |
+| W7-T12 | `src/ws-protocol.ts` | Schema tightening — add `.max(200_000)` to message content (belt-and-suspenders with rate limiter's `maxMessageLength`). Add `.max(Number.MAX_SAFE_INTEGER)` to `lastMessageId`. | Sec INFO-1, Eng P3-8 |
+| W7-T13 | `src/access.ts` | `safeCompare` length-safety — document that the function is only constant-time for equal-length inputs (all current callers use fixed-length SHA-256 hex). Add JSDoc note. | Sec L4 |
+
+#### Group C validation
+- [ ] `safeSend` used in all post-processing ws.send calls in handleMessage
+- [ ] `safeSend` used in approval cleanup and error paths
+- [ ] Worker receives only needed config subset (no `serve.rateLimits`, `serve.privacy`)
+- [ ] WS `content` field has max length in Zod schema
+- [ ] `lastMessageId` has explicit max in Zod schema
+- [ ] `safeCompare` has JSDoc documenting equal-length-only guarantee
+
+---
+
+### Group D: Observability + Health + Test Coverage
+
+| Task | Files | Description | Source |
+|------|-------|-------------|--------|
+| W7-T14 | `src/health.ts` | Bounded health arrays — replace unbounded `errors`/`successes` arrays with a prune-on-insert strategy (every 1000 insertions, trim entries older than 1 hour). Prevents memory growth under sustained load without deep health checks. | Sec L5, Arch #9 |
+| W7-T15 | `src/worker-manager.ts`, `src/health.ts` | `WorkerManager.getStats()` method — localize the utilization computation inside WorkerManager instead of spreading it across the serve.ts lambda. HealthMonitor callback becomes `() => workerManager.getStats()`. | Arch #7 |
+| W7-T16 | `src/session-worker.test.ts` | Wave 6 test coverage gaps — add tests for: (a) worker ready timeout behavior, (b) approval cleanup on WS close, (c) maxWorkers edge values (0, -1, NaN, string), (d) WS schema edge cases (agentId > 200 chars, negative lastMessageId). | Eng P3-12 |
+| W7-T17 | CLI code | `mastersof-ai credentials check --agent <name>` — validate agent credentials config, report which keys are granted/missing. | CLI DX |
+| W7-T18 | CLI code | `mastersof-ai access create --name <name> --agents <list>` — generate token, append to access.yaml. | CLI DX |
+| W7-T19 | CLI code | `mastersof-ai status <agent>` — read runs.jsonl, show recent headless run results. | CLI DX |
+| W7-T20 | CLI code | `mastersof-ai preflight --agent <name>` — validate full config: agent exists, credentials present, egress allowlist valid, sandbox config correct. | CLI DX |
+| W7-T21 | `src/access.ts` | Token rotation mechanism — generate new token for existing user, update access.yaml, disconnect old sessions. | CLI DX |
+
+#### Group D validation
+- [ ] Health arrays never exceed ~2000 entries (prune at 1000 threshold)
+- [ ] No memory growth under sustained load without deep health calls
+- [ ] `workerManager.getStats()` returns `WorkerPoolStats`
+- [ ] Health monitor lambda is just `() => workerManager.getStats()`
+- [ ] Ready timeout test: worker killed after 30s with no "ready"
+- [ ] Approval cleanup test: pending approvals resolved on worker crash
+- [ ] maxWorkers test: 0 → clamped to 1, -1 → clamped to 1, NaN → default
+- [ ] WS schema test: agentId > 200 chars rejected, negative lastMessageId rejected
+- [ ] `credentials check` reports granted/missing keys per domain
+- [ ] `access create` generates token and appends to access.yaml
+- [ ] `status` shows recent run results from runs.jsonl
+- [ ] `preflight` validates agent config end-to-end
+- [ ] Token rotation generates new token, revokes old, disconnects sessions
+
+---
+
+### Verification checklist (Wave 7 — all groups)
+- [ ] `content_block_stop` event kind used consistently
+- [ ] Zero `as any` casts in stream processing and WS relay paths
+- [ ] Zod↔TypeScript type drift causes build failure
+- [ ] Exhaustive switches enforce handling of all SdkEvent kinds
+- [ ] `safeSend` eliminates all bare ws.send in error-prone paths
+- [ ] Worker config minimized to needed subset
+- [ ] Health arrays bounded, worker stats localized
+- [ ] Test suite covers all Wave 6 failure modes
+- [ ] CLI commands operational and documented
+- [ ] All existing tests continue to pass
+
+---
+
+## Wave 8: Documentation Polish — NOT STARTED
 
 - Architecture refresh (DESIGN.md, docs/)
-- CLAUDE.md update for new modules (env-safety, url-safety, credentials, egress-proxy, content-safety, ipc-protocol, session-worker, worker-manager, query-mutex)
+- CLAUDE.md update for new modules (env-safety, url-safety, credentials, egress-proxy, content-safety, ipc-protocol, session-worker, worker-manager, query-mutex, sdk-stream, ws-protocol)
 - CHANGELOG
 - Full security narrative for audit
