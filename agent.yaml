@@ -1,0 +1,48 @@
+spec_version: "0.1.0"
+name: mastersof-ai-harness
+version: 0.2.0
+description: >
+  A transparent, full-control agent runtime built on the Claude Agent SDK.
+  Agents are defined as plain Markdown files (IDENTITY.md) — no hidden framework
+  instructions, no behavioral injection. Supports a terminal TUI for local
+  development and a multi-user web UI (serve mode) with token auth, per-user
+  isolation, rate limiting, and optional bubblewrap sandboxing. Implements the
+  A2A protocol (agent card generation, A2A server/client) and includes a rich
+  in-process tool layer (memory, web search, workspace, MCP, sub-agents).
+license: MIT
+model:
+  preferred: anthropic:claude-sonnet-4-6
+runtime:
+  max_turns: 100
+  entrypoint: bin/mastersof-ai.js
+  environment:
+    - ANTHROPIC_API_KEY
+    - BRAVE_API_KEY
+skills:
+  - name: terminal-tui
+    description: Interactive terminal UI (React/Ink) for local single-user agent conversations
+  - name: web-ui
+    description: Multi-user web interface (Fastify + React SPA) with token-based access control
+  - name: agent-definition
+    description: Define agents as plain Markdown (IDENTITY.md) with optional YAML frontmatter for metadata, tool filtering, and user access control
+  - name: memory
+    description: Persistent cross-session memory system — agents save and recall context across conversations
+  - name: web-search
+    description: Web search via Brave API, available as an in-process MCP tool
+  - name: sub-agents
+    description: Spawn and coordinate sub-agents within a session
+  - name: a2a-protocol
+    description: Generate Agent Cards from IDENTITY.md; discover and call remote A2A agents (LangGraph, Bedrock, other harness instances)
+  - name: sandbox
+    description: Optional bubblewrap (bwrap) filesystem isolation for agent execution
+  - name: mcp-tools
+    description: Extensible in-process MCP tool servers — workspace, memory, scratchpad, web, tasks, models, introspection
+compliance:
+  risk_tier: standard
+  supervision:
+    human_in_the_loop: always
+  privacy:
+    framework: LGPD
+    notes: >
+      Includes built-in LGPD-compliant data export, deletion, consent tracking,
+      and configurable retention policies (src/privacy.ts).
